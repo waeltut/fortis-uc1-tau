@@ -1,0 +1,64 @@
+{
+  "name": "fortis_uc1_tau_devcontainer",
+  "remoteUser": "fortis_dev",
+  "build": {
+      "dockerfile": "Dockerfile",
+      "args": {
+          "USERNAME": "fortis_dev",
+          "GID": "1000",
+          "UID": "1000"
+      }
+  },
+  "customizations": {
+      "vscode": {
+          "extensions": [
+              "ms-python.python",
+              "charliermarsh.ruff",
+              "ms-vscode.cpptools-extension-pack",
+              "ms-iot.vscode-ros",
+              "smilerobotics.urdf",
+              "redhat.vscode-xml",
+              "tamasfe.even-better-toml",
+              "timonwong.shellcheck",
+              "yzhang.markdown-all-in-one"
+          ],
+          "settings": {
+              "files.associations": {
+                  "*.rviz": "yaml",
+                  "*.srdf": "xml",
+                  "*.urdf": "xml",
+                  "*.xacro": "xml"
+              }
+          }
+      }
+  },
+  "workspaceFolder": "/home/fortis_dev/ros2_ws",
+  "workspaceMount": "source=${localWorkspaceFolder},target=/home/fortis_dev/ros2_ws/src,type=bind",
+  "postStartCommand": "colcon build --symlink-install",
+   "containerEnv": {
+        "DISPLAY": "${localEnv:DISPLAY}"
+        //"QT_X11_NO_MITSHM": "1"
+  },
+  "mounts": [],
+"runArgs": [
+    "--runtime=nvidia",
+    "--gpus=all",
+    "--network=host",
+    "--ipc=host", // For shared memory access ROS2 DDS
+    "--group-add", "audio",
+    "--group-add", "video",
+    "--user", "1000:1000",
+    "--device", "/dev/bus/usb",
+    "-e", "PULSE_SERVER=unix:/run/user/1000/pulse/native",
+    "-e", "XDG_RUNTIME_DIR=/run/user/1000",
+    "-v", "/run/user/1000/pulse:/run/user/1000/pulse",
+    "-v", "/tmp/.X11-unix:/tmp/.X11-unix:rw",
+    "-v", "/dev/shm:/dev/shm", // For shared memory access ROS2 DDS
+    "--device", "/dev/video0",
+    "--device", "/dev/video1",
+    "--device", "/dev/video2",
+    "--device", "/dev/video3",
+    "--device", "/dev/video4",
+    "--device", "/dev/video5"
+    ]
+}
