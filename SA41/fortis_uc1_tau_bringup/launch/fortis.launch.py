@@ -23,8 +23,8 @@ def generate_launch_description():
             'enable_color': True,
             'enable_infra1': False,
             'enable_infra2': False,
-            'depth_module.depth_profile': '848x480x15',
-            'rgb_camera.color_profile': '848x480x15',
+            'depth_module.depth_profile': '640x480x15',
+            'rgb_camera.color_profile': '640x480x15',
             'pointcloud.enable': False,
             'enable_imu': True
         }]
@@ -69,12 +69,15 @@ def generate_launch_description():
     )
     declare_slam_params_file = DeclareLaunchArgument(
         'slam_params_file',
-        default_value=os.path.join(get_package_share_directory('slam_config'), 'config', 'mapper_params_localization.yaml'),    # mapper_params_online_async.yaml
+        default_value=os.path.join(get_package_share_directory('slam_config'), 'config', 'mapper_params_localization.yaml'),    # <-- Use this for localization
+        #default_value=os.path.join(get_package_share_directory('slam_config'), 'config', 'mapper_params_online_async.yaml'),    # <-- Use this for mapping
         description='Full path to SLAM params YAML')
     slam_params_file = LaunchConfiguration('slam_params_file')
+    
     slam_node = Node(
         package='slam_toolbox',
-        executable='localization_slam_toolbox_node',    # async_slam_toolbox_node
+        executable='localization_slam_toolbox_node',    # <-- Use this for localization
+        #executable='async_slam_toolbox_node',    # <-- Use this for mapping
         name='slam_toolbox',
         output='screen',
         parameters=[
@@ -82,7 +85,7 @@ def generate_launch_description():
         ]
     )
     nav2_launch = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(os.path.join(get_package_share_directory('slam_config'), 'launch', 'navigation_launch.py')),
+        PythonLaunchDescriptionSource(os.path.join(get_package_share_directory('slam_config'), 'launch', 'nav2_launch.py')),
     )
 
     # TK33 Nodes
@@ -158,12 +161,21 @@ def generate_launch_description():
         )
     )
 
-    slam__proximity = RegisterEventHandler(
+    
+    proximity = RegisterEventHandler(
         OnProcessStart(
             target_action=mir_bridge_node,
             on_start=[
-                slam_node,
                 proximity_node
+            ]
+        )
+    )
+
+    slam = RegisterEventHandler(
+        OnProcessStart(
+            target_action=proximity_node,
+            on_start=[
+                slam_node
             ]
         )
     )
@@ -187,12 +199,15 @@ def generate_launch_description():
 
     ### Launching nodes in sequence ###
     ld.add_action(declare_slam_params_file)
-    ld.add_action(foxglove_bridge_node)
-    ld.add_action(realsence__mic)
-    ld.add_action(hearing__audio_analyser) 
-    ld.add_action(vision__quality_assessment) 
-    ld.add_action(slam__proximity)
-    ld.add_action(last_lunch)
+    #ld.add_action(foxglove_bridge_node)
+    #ld.add_action(realsence__mic)
+    #ld.add_action(hearing__audio_analyser) 
+    #ld.add_action(vision__quality_assessment) 
+    #ld.add_action(mir_bridge_node)
+    #ld.add_action(proximity_node)
+    #ld.add_action(slam_node)
+    ld.add_action(nav2_launch)
+    #ld.add_action(last_lunch)
 
     ### Launching nodes in parallel (uncomment if you want to launch all nodes at once) ###
     # ld.add_action(foxglove_bridge_node)
@@ -215,8 +230,16 @@ def generate_launch_description():
     # ld.add_action(respond_node)
     # ld.add_action(work_node)
 
-    ### Launching nodes for rosbag recordings
-    # ld.add_action(foxglove_bridge_node)
+
+    ### Launching nodes for Mapping
+    # ld.add_action(declare_slam_params_file)
+    # ld.add_action(mir_bridge_node)
+    # ld.add_action(realsence__mic)
+    # ld.add_action(proximity)
+    # ld.add_action(slam)
+
+
+    ### Launching nodes for Recording Ros bags
     # ld.add_action(realsense_node)
     # ld.add_action(mic_publisher_node)
     # ld.add_action(mir_bridge_node)

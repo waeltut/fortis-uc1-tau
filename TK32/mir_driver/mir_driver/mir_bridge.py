@@ -75,7 +75,6 @@ def laser_conv(msg):
 
     return scan
 
-
 def odom_conv(msg):
     odom = Odometry()
 
@@ -114,7 +113,6 @@ def odom_conv(msg):
     odom.twist.covariance = list(msg['twist']['covariance'])
 
     return odom
-
 
 def cmd_vel_conv(msg):
     return {
@@ -164,6 +162,7 @@ TYPES = {
     "/cmd_vel": [Twist, cmd_vel_conv],
     "/MC/battery_percentage": [Float64, std_msg_f64],
     "/robot_state": [MirState, mir_state],
+    "/scan": [LaserScan, laser_conv],
 }    # The qos-profiles can/should be changed
 
 
@@ -254,7 +253,9 @@ class Subscriber(object):
                 self.tf_broadcaster.sendTransform(t)
         else:
             self.pub_local.publish(ros2_msg)
-    
+        return
+
+       
     # Thank you /tf_static. Very cool
     def tf_static_callback(self, msg):
         if not rclpy.ok():
@@ -289,7 +290,7 @@ class Subscriber(object):
 # The bridge
 class MiR_Bridge(Node):
     def __init__(self, rosbridge_host='192.168.12.20', rosbridge_port=9090):
-        super().__init__('rosbridge_explorer')
+        super().__init__('mir_bridge')
         
         try:
             # Variables

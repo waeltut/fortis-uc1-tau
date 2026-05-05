@@ -40,13 +40,27 @@ def generate_launch_description():
     use_respawn = LaunchConfiguration('use_respawn')
     log_level = LaunchConfiguration('log_level')
 
-    lifecycle_nodes = ['controller_server',
-                       'smoother_server',
-                       'planner_server',
-                       'behavior_server',
-                       'bt_navigator',
-                       'waypoint_follower',
-                       'velocity_smoother']
+    # lifecycle_nodes = ['controller_server',
+    #                    'smoother_server',
+    #                    'planner_server',
+    #                    'behavior_server',
+    #                    'bt_navigator',
+    #                    'waypoint_follower',
+    #                    'velocity_smoother']
+
+    
+    lifecycle_nodes = [
+        'controller_server',
+        'smoother_server',
+        'planner_server',
+        'behavior_server',
+        'bt_navigator',
+        'waypoint_follower',
+        'velocity_smoother',
+        'map_server',
+        'amcl',
+    ]
+
 
     # Map fully qualified names to relative ones so the node's namespace can be prepended.
     # In case of the transforms (tf), currently, there doesn't seem to be a better alternative
@@ -190,6 +204,20 @@ def generate_launch_description():
                 parameters=[{'use_sim_time': use_sim_time},
                             {'autostart': autostart},
                             {'node_names': lifecycle_nodes}]),
+            Node(
+                package='nav2_map_server',
+                executable='map_server',
+                name='map_server',
+                output='screen',
+                parameters=[configured_params],
+                ),
+            Node(
+                package='nav2_amcl',
+                executable='amcl',
+                name='amcl',
+                output='screen',
+                parameters=[configured_params],
+            ),
         ]
     )
 

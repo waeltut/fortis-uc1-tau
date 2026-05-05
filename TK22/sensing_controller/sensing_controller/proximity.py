@@ -152,10 +152,10 @@ class Proximity(Node):
         # Messages
         self.prox_msg = prx()
         self.prox_msg.header = Header()
-        self.prox_msg.header.frame_id = "base_link"
+        self.prox_msg.header.frame_id = "base_footprint"
         self.comp_lidar_msg = LaserScan()
         self.comp_lidar_msg.header = Header()
-        self.comp_lidar_msg.header.frame_id = "base_link"
+        self.comp_lidar_msg.header.frame_id = "base_footprint"
 
         # Transforms
         self.tf_buffer = Buffer()

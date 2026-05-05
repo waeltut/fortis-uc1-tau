@@ -11,8 +11,10 @@ setup(
         ('share/' + package_name + '/config', ['config/mapper_params_online_async.yaml']),
         ('share/' + package_name + '/config', ['config/mapper_params_localization.yaml']),
         ('share/' + package_name + '/config', ['config/nav2_params.yaml']),
-        ('share/' + package_name + '/launch', ['launch/navigation_launch.py']),
+        ('share/' + package_name + '/launch', ['launch/nav2_launch.py']),
         ('share/' + package_name, ['package.xml']),
+        ('share/' + package_name + '/maps', ['maps/map1.yaml', 'maps/map1.pgm']),
+
     ],
     install_requires=['setuptools'],
     zip_safe=True,

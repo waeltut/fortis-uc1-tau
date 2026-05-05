@@ -1,0 +1,7 @@
+
+<library path="adaptive_layers">
+  <class
+    name="adaptive_layers::AudioLayer"
+    type="adaptive_layers::AudioLayer"
+    base_class_type="nav2_costmap_2d::Layer"/>
+</library>

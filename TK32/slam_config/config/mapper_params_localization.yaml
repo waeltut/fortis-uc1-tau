@@ -12,12 +12,11 @@ slam_toolbox:
     map_frame: map
     base_frame: base_footprint
     scan_topic: /steven/sensing/scan_composite
-    mode: localization #mapping #
+    mode: localization                # <-- Use this for localization#
+    #mode: mapping               # <-- Use this for mapping
 
     # if you'd like to start localizing on bringup in a map and pose
-    #map_file_name: test_steve
-    #map_start_pose: [5.0, 1.0, 0.0]
-    map_file_name: ../maps/FAST_lab1
+    map_file_name: /home/fortis_dev/ros2_ws/src/TK32/slam_config/maps/map1
     map_start_pose: [0.0, 0.0, 0.0]
 
     debug_logging: false
