@@ -1,4 +1,6 @@
 from setuptools import find_packages, setup
+from glob import glob
+import os
 
 package_name = 'slam_config'
 
@@ -13,7 +15,9 @@ setup(
         ('share/' + package_name + '/config', ['config/nav2_params.yaml']),
         ('share/' + package_name + '/launch', ['launch/nav2_launch.py']),
         ('share/' + package_name, ['package.xml']),
-        ('share/' + package_name + '/maps', ['maps/map1.yaml', 'maps/map1.pgm']),
+        ('share/' + package_name + '/maps', ['maps/map3.yaml', 'maps/map3.pgm']),
+        (os.path.join('share', package_name, 'maps'), glob('maps/*')),
+
 
     ],
     install_requires=['setuptools'],

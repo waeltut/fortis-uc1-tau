@@ -9,6 +9,10 @@ namespace adaptive_layers
 
     class AudioLayer : public nav2_costmap_2d::CostmapLayer
     {
+                
+        protected:
+        rclcpp::Logger logger_{rclcpp::get_logger("adaptive_layers.AudioLayer")};
+
         public:
         AudioLayer();
 

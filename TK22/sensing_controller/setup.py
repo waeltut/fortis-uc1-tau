@@ -36,7 +36,6 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'proximity = sensing_controller.proximity:main',
             'hearing = sensing_controller.hearing:main',
             'vision = sensing_controller.vision:main',
         ],

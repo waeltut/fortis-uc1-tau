@@ -26,7 +26,7 @@ def generate_launch_description():
             'depth_module.depth_profile': '640x480x15',
             'rgb_camera.color_profile': '640x480x15',
             'pointcloud.enable': False,
-            'enable_imu': True
+            'enable_imu': False
         }]
     )
     mic_publisher_node = Node(
@@ -63,21 +63,20 @@ def generate_launch_description():
     # TODO: Add TK24 nodes here
 
     # TK32 Nodes    
-    mir_bridge_node = Node(
-        package='mir_driver',
-        executable='mir_bridge',
+    mir_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(os.path.join(get_package_share_directory('mir_driver'), 'launch', 'mir_launch.py')),
     )
     declare_slam_params_file = DeclareLaunchArgument(
         'slam_params_file',
-        default_value=os.path.join(get_package_share_directory('slam_config'), 'config', 'mapper_params_localization.yaml'),    # <-- Use this for localization
-        #default_value=os.path.join(get_package_share_directory('slam_config'), 'config', 'mapper_params_online_async.yaml'),    # <-- Use this for mapping
+        #default_value=os.path.join(get_package_share_directory('slam_config'), 'config', 'mapper_params_localization.yaml'),    # <-- Use this for localization
+        default_value=os.path.join(get_package_share_directory('slam_config'), 'config', 'mapper_params_online_async.yaml'),    # <-- Use this for mapping
         description='Full path to SLAM params YAML')
     slam_params_file = LaunchConfiguration('slam_params_file')
     
     slam_node = Node(
         package='slam_toolbox',
-        executable='localization_slam_toolbox_node',    # <-- Use this for localization
-        #executable='async_slam_toolbox_node',    # <-- Use this for mapping
+        #executable='localization_slam_toolbox_node',    # <-- Use this for localization
+        executable='async_slam_toolbox_node',    # <-- Use this for mapping
         name='slam_toolbox',
         output='screen',
         parameters=[
@@ -130,84 +129,11 @@ def generate_launch_description():
 
     ### Starting Sequence ###
 
-    realsence__mic = RegisterEventHandler(
-        OnProcessStart(
-            target_action=foxglove_bridge_node,
-            on_start=[
-                realsense_node,
-                mic_publisher_node
-            ]
-        )
-    )
 
-    hearing__audio_analyser = RegisterEventHandler(
-        OnProcessStart(
-            target_action=mic_publisher_node,
-            on_start=[
-                hearing_node, 
-                audio_analyser_node
-            ]
-        )
-    )
 
-    vision__quality_assessment = RegisterEventHandler(
-        OnProcessStart(
-            target_action=realsense_node,
-            on_start=[
-                vision_node, 
-                quality_assessment_node, 
-                mir_bridge_node
-            ]
-        )
-    )
-
-    
-    proximity = RegisterEventHandler(
-        OnProcessStart(
-            target_action=mir_bridge_node,
-            on_start=[
-                proximity_node
-            ]
-        )
-    )
-
-    slam = RegisterEventHandler(
-        OnProcessStart(
-            target_action=proximity_node,
-            on_start=[
-                slam_node
-            ]
-        )
-    )
-
-    last_lunch = RegisterEventHandler(
-        OnProcessStart(
-            target_action=slam_node,
-            on_start=[
-                basic_move_node, 
-                coordinator_node, 
-                aggregate_node, 
-                capability_node, 
-                inform_node, 
-                replan_node, 
-                respond_node,
-                #work_node,
-                #nav2_launch
-            ]
-        )
-    )
 
     ### Launching nodes in sequence ###
-    ld.add_action(declare_slam_params_file)
-    #ld.add_action(foxglove_bridge_node)
-    #ld.add_action(realsence__mic)
-    #ld.add_action(hearing__audio_analyser) 
-    #ld.add_action(vision__quality_assessment) 
-    #ld.add_action(mir_bridge_node)
-    #ld.add_action(proximity_node)
-    #ld.add_action(slam_node)
-    ld.add_action(nav2_launch)
-    #ld.add_action(last_lunch)
+    # TODO: add the launch correct order 
 
     ### Launching nodes in parallel (uncomment if you want to launch all nodes at once) ###
     # ld.add_action(foxglove_bridge_node)
@@ -218,9 +144,9 @@ def generate_launch_description():
     # ld.add_action(proximity_node)
     # ld.add_action(audio_analyser_node)
     # ld.add_action(quality_assessment_node)
-    # ld.add_action(mir_bridge_node)
+    # ld.add_action(mir_launch)
     # ld.add_action(slam_node)
-    # ld.add_action(nav2_launch)
+    ld.add_action(nav2_launch)
     # ld.add_action(basic_move_node)
     # ld.add_action(coordinator_node)
     # ld.add_action(aggregate_node)
@@ -233,10 +159,9 @@ def generate_launch_description():
 
     ### Launching nodes for Mapping
     # ld.add_action(declare_slam_params_file)
-    # ld.add_action(mir_bridge_node)
-    # ld.add_action(realsence__mic)
-    # ld.add_action(proximity)
-    # ld.add_action(slam)
+    # ld.add_action(mic_publisher_node)
+    #ld.add_action(realsense_node)
+    # ld.add_action(slam_node)
 
 
     ### Launching nodes for Recording Ros bags

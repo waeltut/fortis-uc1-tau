@@ -26,6 +26,7 @@ setup(
     entry_points={
         'console_scripts': [
             'mir_bridge = mir_driver.mir_bridge:main',
+            'scanners_merger = mir_driver.scanners_merger:main',
         ],
     },
 )
