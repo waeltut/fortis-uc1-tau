@@ -15,7 +15,6 @@ setup(
         ('share/' + package_name + '/config', ['config/nav2_params.yaml']),
         ('share/' + package_name + '/launch', ['launch/nav2_launch.py']),
         ('share/' + package_name, ['package.xml']),
-        ('share/' + package_name + '/maps', ['maps/map3.yaml', 'maps/map3.pgm']),
         (os.path.join('share', package_name, 'maps'), glob('maps/*')),
 
 
