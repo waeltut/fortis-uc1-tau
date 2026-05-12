@@ -43,10 +43,6 @@ def generate_launch_description():
         package='sensing_controller',
         executable='vision',
     )
-    proximity_node = Node(
-        package='sensing_controller',
-        executable='proximity',
-    )
     audio_analyser_node = Node(
         package='environment_perception',
         executable='audio_analyser',
@@ -71,8 +67,7 @@ def generate_launch_description():
         #default_value=os.path.join(get_package_share_directory('slam_config'), 'config', 'mapper_params_localization.yaml'),    # <-- Use this for localization
         default_value=os.path.join(get_package_share_directory('slam_config'), 'config', 'mapper_params_online_async.yaml'),    # <-- Use this for mapping
         description='Full path to SLAM params YAML')
-    slam_params_file = LaunchConfiguration('slam_params_file')
-    
+    slam_params_file = LaunchConfiguration('slam_params_file') 
     slam_node = Node(
         package='slam_toolbox',
         #executable='localization_slam_toolbox_node',    # <-- Use this for localization
@@ -130,8 +125,6 @@ def generate_launch_description():
     ### Starting Sequence ###
 
 
-
-
     ### Launching nodes in sequence ###
     # TODO: add the launch correct order 
 
@@ -141,12 +134,11 @@ def generate_launch_description():
     # ld.add_action(mic_publisher_node)
     # ld.add_action(hearing_node)
     # ld.add_action(vision_node)
-    # ld.add_action(proximity_node)
     # ld.add_action(audio_analyser_node)
     # ld.add_action(quality_assessment_node)
     # ld.add_action(mir_launch)
     # ld.add_action(slam_node)
-    ld.add_action(nav2_launch)
+    #ld.add_action(nav2_launch)
     # ld.add_action(basic_move_node)
     # ld.add_action(coordinator_node)
     # ld.add_action(aggregate_node)

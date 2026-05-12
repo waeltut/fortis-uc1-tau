@@ -1,270 +1,231 @@
 #!/usr/bin/env python3
 import rclpy
 from rclpy.node import Node
+
 from sensor_msgs.msg import Image
-from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
+from diagnostic_msgs.msg import DiagnosticStatus
 from realsense2_camera_msgs.msg import Metadata
-from std_msgs.msg import Float64
+from fortis_interfaces.msg import VideoQualityScore, VideoQualityStatus, VideoQualityStatusColorMetrics, VideoQualityStatusDepthMetrics
+
 from cv_bridge import CvBridge
 import cv2
 import numpy as np
-#from scipy.ndimage import sobel
 import time
-#import json
+import json
+
 
 class VideoQualityAssessment(Node):
+
     def __init__(self):
         super().__init__('video_quality_assessment')
-        
+
+        # --------------------
         # Parameters
-        self.declare_parameter('camera_name', 'D455')
-        self.declare_parameter('color_topic', '/camera/camera/color/image_raw')
-        self.declare_parameter('depth_topic', '/camera/camera/depth/image_rect_raw')
-        self.declare_parameter('color_meta_topic', '/camera/camera/color/metadata')
-        self.declare_parameter('depth_meta_topic', '/camera/camera/depth/metadata')
-        
-        self.camera_name = self.get_parameter('camera_name').value
-        self.color_topic = self.get_parameter('color_topic').value
-        self.depth_topic = self.get_parameter('depth_topic').value
-        self.color_meta_topic = self.get_parameter('color_meta_topic').value
-        self.depth_meta_topic = self.get_parameter('depth_meta_topic').value
-        
+        # --------------------
+        self.camera_name = 'D455'
+        self.color_topic = '/camera/camera/color/image_raw'
+        self.depth_topic = '/camera/camera/depth/image_rect_raw'
+        self.color_meta_topic = '/camera/camera/color/metadata'
+        self.depth_meta_topic = '/camera/camera/depth/metadata'
+
+        # --------------------
         # Subscribers
-        self.color_sub = self.create_subscription(
-            Image, self.color_topic, self.color_callback, 10)
-        self.depth_sub = self.create_subscription(
-            Image, self.depth_topic, self.depth_callback, 10)
-        self.color_meta_sub = self.create_subscription(
-            Metadata, self.color_meta_topic, self.color_meta_callback, 10)
-        self.depth_meta_sub = self.create_subscription(
-            Metadata, self.depth_meta_topic, self.depth_meta_callback, 10)
-        
+        # --------------------
+        self.create_subscription(Image, self.color_topic, self.color_callback, 10)
+        self.create_subscription(Image, self.depth_topic, self.depth_callback, 10)
+        self.create_subscription(Metadata, self.color_meta_topic, self.color_meta_callback, 10)
+        self.create_subscription(Metadata, self.depth_meta_topic, self.depth_meta_callback, 10)
+
+        # --------------------
         # Publishers
-        self.quality_pub = self.create_publisher(DiagnosticArray, '/video_quality_status', 10)
-        self.quality_score_pub = self.create_publisher(Float64, '/video_quality_score', 10)
-        
+        # --------------------
+        self.status_pub = self.create_publisher(VideoQualityStatus, '/video_quality_status', 10)
+        self.score_pub = self.create_publisher(VideoQualityScore, '/video_quality_score', 10)
+
+        # --------------------
+        # Internal state
+        # --------------------
         self.bridge = CvBridge()
-        self.metrics = {}
+
         self.rgb_metrics = {}
         self.depth_metrics = {}
         self.meta_metrics = {}
-        
-        self.color_frame_count = 0
-        self.depth_frame_count = 0
-        self.last_time = time.time()
-        
-        self.get_logger().info(f'Quality publisher ready for {self.camera_name}')
-        self.get_logger().info(f'Subscribing to: {self.color_topic}, {self.depth_topic}')
-        
+
+        self.rgb_ready = False
+        self.depth_ready = False
+
+        self.smoothed_score = 0.0
+
+        self.color_frames = 0
+        self.depth_frames = 0
+        self.last_fps_time = time.time()
+
+        self.get_logger().info(f'Video quality assessment started for {self.camera_name}')
+
+    # ======================================================================
+    # Callbacks
+    # ======================================================================
+
     def color_callback(self, msg):
-        self.color_frame_count += 1
+        self.color_frames += 1
         try:
-            cv_image = self.bridge.imgmsg_to_cv2(msg, "bgr8")
-            gray = cv2.cvtColor(cv_image, cv2.COLOR_BGR2GRAY)
+            img = self.bridge.imgmsg_to_cv2(msg, 'bgr8')
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
             self.rgb_metrics = self.compute_rgb_metrics(gray)
+            self.rgb_ready = True
         except Exception as e:
             self.get_logger().warn(f'RGB processing failed: {e}')
-        
-        self.publish_combined_metrics(msg.header)
-    
+
+        self.try_publish(msg.header)
+
     def depth_callback(self, msg):
-        self.depth_frame_count += 1
+        self.depth_frames += 1
         try:
-            depth_image = self.bridge.imgmsg_to_cv2(msg, "32FC1")
-            self.depth_metrics = self.compute_depth_metrics(depth_image)
+            depth = self.bridge.imgmsg_to_cv2(msg, '32FC1')
+            self.depth_metrics = self.compute_depth_metrics(depth)
+            self.depth_ready = True
         except Exception as e:
             self.get_logger().warn(f'Depth processing failed: {e}')
-        
-        self.publish_combined_metrics(msg.header)
-    
+
+        self.try_publish(msg.header)
+
     def color_meta_callback(self, msg):
         try:
-            self.meta_metrics['rgb_actual_exposure'] = msg.auto_exposure
-            self.meta_metrics['rgb_fps'] = msg.actual_fps / 100.0
-            self.meta_metrics['rgb_sensor_brightness'] = msg.brightness
-            # I did not find anything that says rgb_gain or similar. Might have to come back later
-            # self.meta_metrics['rgb_gain'] = msg.gain_field_if_exists
+            meta = json.loads(msg.json_data)
+            self.meta_metrics['rgb_auto_exposure'] = meta.get('auto_exposure', False)
+            self.meta_metrics['rgb_exposure_time'] = meta.get('actual_exposure', None)
+            self.meta_metrics['rgb_gain'] = meta.get('gain', None)
         except Exception as e:
-            print(f"Error in color_meta_callback: {e}")
-        """
-        try:
-            if msg.key == 'actual_exposure':
-                self.meta_metrics['rgb_actual_exposure'] = float(msg.value)
-            elif msg.key == 'gain':
-                self.meta_metrics['rgb_gain'] = float(msg.value)
-            elif msg.key == 'frame_rate':
-                self.meta_metrics['rgb_fps'] = float(msg.value)
-            elif msg.key == 'brightness':
-                self.meta_metrics['rgb_sensor_brightness'] = int(msg.value)
-        except:
-            pass
-        """
-    
+            self.get_logger().debug(f'RGB metadata error: {e}')
+
     def depth_meta_callback(self, msg):
         try:
-            self.meta_metrics['depth_laser_power'] = msg.frame_laser_power
-            # Again, could not find anything related to confidence and frame drops
+            meta = json.loads(msg.json_data)
+            self.meta_metrics['depth_laser_power'] = meta.get('frame_laser_power', None)
         except Exception as e:
-            print(f"Error in depth_meta_callback: {e}")
-        """
-        try:
-            if msg.key == 'laser_power':
-                self.meta_metrics['depth_laser_power'] = float(msg.value)
-            elif msg.key == 'confidence':
-                self.meta_metrics['depth_confidence'] = float(msg.value)
-            elif msg.key == 'frame_drop_percentage':
-                self.meta_metrics['frame_drop_pct'] = float(msg.value)
-        except:
-            pass
-        """
-    
+            self.get_logger().debug(f'Depth metadata error: {e}')
+
+    # ======================================================================
+    # Metric computation
+    # ======================================================================
+
     def compute_rgb_metrics(self, gray):
-        # Sharpness (Laplacian variance)
-        laplacian = cv2.Laplacian(gray, cv2.CV_64F)
-        sharpness = laplacian.var()
-        
-        # Brightness statistics
-        mean_bright = np.mean(gray)
-        std_bright = np.std(gray)
-        
-        # Contrast (Michelson)
-        gray = gray.astype(np.float32)
-        contrast = (np.max(gray) - np.min(gray)) / (np.max(gray) + np.min(gray) + 1e-6)
-        
-        # Noise level (high-frequency content)
+        lap = cv2.Laplacian(gray, cv2.CV_64F)
+        sharpness = lap.var()
+
+        mean_brightness = float(np.mean(gray))
+        contrast = (float(np.max(gray)) - float(np.min(gray))) / (float(np.max(gray)) + float(np.min(gray)) + 1e-6)
+
         sobelx = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)
         sobely = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
-        noise_level = np.sqrt(sobelx.var() + sobely.var())
-        
+        noise = np.sqrt(sobelx.var() + sobely.var())
+
         return {
             'sharpness': sharpness,
-            'mean_brightness': mean_bright,
-            'brightness_std': std_bright,
+            'mean_brightness': mean_brightness,
             'contrast': contrast,
-            'noise_level': noise_level
+            'noise_level': noise
         }
-    
-    def compute_depth_metrics(self, depth_image):
-        valid_mask = np.isfinite(depth_image)
-        valid_pixels = np.sum(valid_mask)
-        total_pixels = depth_image.size
-        
-        # Fill rate
-        fill_rate = (valid_pixels / total_pixels) * 100
-        
-        # Depth precision
-        valid_depths = depth_image[valid_mask]
-        depth_std = np.std(valid_depths) if valid_pixels > 0 else 0.0
-        
-        # Depth range
-        depth_min = np.min(valid_depths) if valid_pixels > 0 else 0.0
-        depth_max = np.max(valid_depths) if valid_pixels > 0 else 0.0
-        
-        # Spatial consistency
-        grad_x = np.gradient(depth_image, axis=1)
-        grad_y = np.gradient(depth_image, axis=0)
+
+    def compute_depth_metrics(self, depth):
+        valid = np.isfinite(depth)
+        valid_count = np.sum(valid)
+
+        fill_rate = 100.0 * valid_count / depth.size if depth.size > 0 else 0.0
+        valid_depths = depth[valid]
+
+        depth_std = float(np.std(valid_depths)) if valid_count > 0 else 0.0
+
+        grad_x = np.gradient(depth, axis=1)
+        grad_y = np.gradient(depth, axis=0)
         grad_mag = np.sqrt(grad_x**2 + grad_y**2)
-        consistency = np.mean(grad_mag[valid_mask]) if valid_pixels > 0 else 0.0
-        
+        consistency = float(np.mean(grad_mag[valid])) if valid_count > 0 else 0.0
+
         return {
             'fill_rate': fill_rate,
             'depth_std': depth_std,
-            'depth_range': depth_max - depth_min,
             'spatial_consistency': consistency
         }
-    
+
+    # ======================================================================
+    # Scoring helpers
+    # ======================================================================
+
+    def clamp01(self, x):
+        return max(0.0, min(1.0, x))
+
+    def smooth_score(self, value, good_min, good_max):
+        return self.clamp01((value - good_min) / (good_max - good_min))
+
     def compute_quality_score(self):
-        """Combined quality score 0-100"""
         score = 0.0
-        
-        # RGB Image metrics (40%)
-        if 'sharpness' in self.rgb_metrics:
-            score += min(self.rgb_metrics['sharpness'] / 200, 1.0) * 20
-        if 'brightness_std' in self.rgb_metrics:
-            score += min(self.rgb_metrics['brightness_std'] / 80, 1.0) * 10
-        if 'contrast' in self.rgb_metrics:
-            score += min(self.rgb_metrics['contrast'] / 0.5, 1.0) * 10
-        
-        # Depth Image metrics (30%)
-        if 'fill_rate' in self.depth_metrics:
-            score += min(self.depth_metrics['fill_rate'] / 100, 1.0) * 20
-        if 'depth_std' in self.depth_metrics:
-            score += max(0, 1.0 - (self.depth_metrics['depth_std'] / 0.02)) * 10
-        
-        # Metadata metrics (30%)
-        if 'rgb_actual_exposure' in self.meta_metrics:
-            exp = self.meta_metrics['rgb_actual_exposure']
-            score += 1.0 if 50 < exp < 1000 else 0.3 * 10
-        if 'rgb_gain' in self.meta_metrics:
-            gain = self.meta_metrics['rgb_gain']
-            score += min(1.0 / (gain + 1), 1.0) * 10
-        if 'depth_laser_power' in self.meta_metrics:
-            laser = self.meta_metrics['depth_laser_power']
-            score += min(laser / 360, 1.0) * 10
-        
+
+        # RGB (35)
+        sharp = self.rgb_metrics.get('sharpness', 0.0)
+        score += self.smooth_score(sharp, 50, 300) * 15
+
+        contrast = self.rgb_metrics.get('contrast', 0.0)
+        score += self.smooth_score(contrast, 0.1, 0.5) * 10
+
+        noise = self.rgb_metrics.get('noise_level', 0.0)
+        score += (1.0 - self.smooth_score(noise, 5, 20)) * 10
+
+        # Depth (30)
+        fill = self.depth_metrics.get('fill_rate', 0.0)
+        score += self.smooth_score(fill, 85, 98) * 20
+
+        depth_std = self.depth_metrics.get('depth_std', 0.0)
+        score += (1.0 - self.smooth_score(depth_std, 0.01, 0.05)) * 10
+
+        # Metadata (15)
+        if self.meta_metrics.get('rgb_auto_exposure', False):
+            score += 5
+
+        exp = self.meta_metrics.get('rgb_exposure_time')
+        if exp is not None:
+            score += self.smooth_score(exp, 100, 1000) * 5
+
+        laser = self.meta_metrics.get('depth_laser_power')
+        if laser is not None:
+            score += self.smooth_score(laser, 150, 360) * 5
+
         return min(score, 100.0)
-    
-    def publish_combined_metrics(self, header):
-        if not self.rgb_metrics or not self.depth_metrics:
+
+    # ======================================================================
+    # Publishing
+    # ======================================================================
+
+    def try_publish(self, header):
+        if not (self.rgb_ready and self.depth_ready):
             return
-            
-        diag_array = DiagnosticArray()
-        diag_array.header = header
+
+        raw_score = self.compute_quality_score()
+        self.smoothed_score = 0.8 * self.smoothed_score + 0.2 * raw_score
         
-        # RGB Status
-        rgb_status = DiagnosticStatus()
-        rgb_status.name = 'RGB Quality Metrics'
-        rgb_status.level = self.get_status_level(self.rgb_metrics)
-        rgb_status.message = f'RGB Quality: {self.compute_quality_score():.1f}/100'
+        score_msg = VideoQualityScore()
+        score_msg.header.stamp = self.get_clock().now().to_msg()
+        score_msg.header.frame_id = 'camera_link'
+        score_msg.score = self.smoothed_score
+        self.score_pub.publish(score_msg)
+
+        status_msg = VideoQualityStatus()
+        status_msg.header.stamp = self.get_clock().now().to_msg()
+        status_msg.header.frame_id = 'camera_link'
+        status_msg.color = VideoQualityStatusColorMetrics()
+        status_msg.color.contrast = self.rgb_metrics['contrast']
+        status_msg.color.mean_brightness = self.rgb_metrics['mean_brightness']
+        status_msg.color.noise_level = self.rgb_metrics['noise_level']
+        status_msg.color.sharpness = self.rgb_metrics['sharpness']
+        status_msg.depth = VideoQualityStatusDepthMetrics()
+        status_msg.depth.depth_std = self.depth_metrics['depth_std']
+        status_msg.depth.fill_rate=self.depth_metrics['fill_rate']
+        status_msg.depth.spatial_consistency=self.depth_metrics['spatial_consistency']
+        self.status_pub.publish(status_msg)
         
-        for key, value in self.rgb_metrics.items():
-            kv = KeyValue(key=f'rgb_{key}', value=str(value))
-            rgb_status.values.append(kv)
-        
-        # Depth Status
-        depth_status = DiagnosticStatus()
-        depth_status.name = 'Depth Quality Metrics'
-        depth_status.level = self.get_status_level(self.depth_metrics)
-        depth_status.message = 'Depth Quality: OK'
-        
-        for key, value in self.depth_metrics.items():
-            kv = KeyValue(key=f'depth_{key}', value=str(value))
-            depth_status.values.append(kv)
-        
-        # Metadata Status
-        meta_status = DiagnosticStatus()
-        meta_status.name = 'Camera Metadata'
-        meta_status.level = DiagnosticStatus.OK
-        meta_status.message = 'Metadata available'
-        
-        for key, value in self.meta_metrics.items():
-            kv = KeyValue(key=key, value=str(value))
-            meta_status.values.append(kv)
-        
-        diag_array.status.extend([rgb_status, depth_status, meta_status])
-        self.quality_pub.publish(diag_array)
-        
-        # Quality score
-        score_msg = Float64()
-        score_msg.data = self.compute_quality_score()
-        self.quality_score_pub.publish(score_msg)
-        
-        # FPS logging
-        now = time.time()
-        if now - self.last_time > 1.0:
-            fps_color = self.color_frame_count
-            fps_depth = self.depth_frame_count
-            self.get_logger().debug(f'RGB FPS: {fps_color}, Depth FPS: {fps_depth}, Quality: {score_msg.data:.1f}')
-            self.color_frame_count = 0
-            self.depth_frame_count = 0
-            self.last_time = now
-    
-    def get_status_level(self, metrics):
-        if 'sharpness' in metrics and metrics['sharpness'] < 50:
-            return DiagnosticStatus.WARN
-        if 'fill_rate' in metrics and metrics['fill_rate'] < 90:
-            return DiagnosticStatus.WARN
-        return DiagnosticStatus.OK
+        self.rgb_ready=False
+        self.depth_ready=False
+
+
 
 def main(args=None):
     rclpy.init(args=args)
