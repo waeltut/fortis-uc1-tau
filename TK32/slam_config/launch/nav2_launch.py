@@ -5,7 +5,6 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
-from nav2_common.launch import RewrittenYaml
 from launch_ros.descriptions import ParameterFile
 
 
@@ -32,13 +31,7 @@ def generate_launch_description():
     # --------------------------------------------------
     # Rewritten params
     # --------------------------------------------------
-    configured_params = ParameterFile(
-        RewrittenYaml(
-            source_file=params_file,
-            root_key='',
-            param_rewrites={'use_sim_time': use_sim_time},
-            convert_types=True),
-        allow_substs=True)
+    configured_params = params_file
 
     # --------------------------------------------------
     # Launch description
