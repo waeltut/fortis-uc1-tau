@@ -4,7 +4,7 @@ amcl:
     use_sim_time: False     # Use for real-time
     set_initial_pose: true
     initial_pose:
-      x: 0.0
+      x: 1.0
       y: 0.0
       z: 0.0
       yaw: 0.0
@@ -226,16 +226,16 @@ local_costmap:
           max_obstacle_height: 2.0
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        inflation_radius: 0.37
-        cost_scaling_factor: 5.0
+        inflation_radius: 0.3
+        cost_scaling_factor: 10.0
       always_send_full_costmap: True
       transform_tolerance: 0.2
 
 global_costmap:
   global_costmap:
     ros__parameters:
-      update_frequency: 1.0
-      publish_frequency: 1.0
+      update_frequency: 2.0
+      publish_frequency: 2.0
       global_frame: map
       robot_base_frame: base_footprint
       use_sim_time: False
@@ -257,7 +257,7 @@ global_costmap:
           topic: /scan
           data_type: "LaserScan"
           clearing: True
-          marking: True
+          marking: False
           obstacle_max_range: 8.0
           obstacle_min_range: 0.0
           raytrace_max_range: 10.0
@@ -266,11 +266,11 @@ global_costmap:
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         enabled: true
-        inflation_radius: 0.7
-        cost_scaling_factor: 5.0
+        inflation_radius: 0.5
+        cost_scaling_factor: 3.0
       audio_layer:
         plugin: "adaptive_layers::AudioLayer"
-        enabled: True
+        enabled: true
         param_1: 0.7
       always_send_full_costmap: True
       transform_tolerance: 0.2

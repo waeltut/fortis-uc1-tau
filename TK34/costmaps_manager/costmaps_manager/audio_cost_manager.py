@@ -14,7 +14,7 @@ class AudioCostManager(Node):
         self.width = None
         self.height = None
         self.resolution = None
-        self.publish_rate = 0.2 # Hz
+        self.publish_rate = 0.1 # Hz
         self.size = None
         self.origin = None
 
@@ -62,21 +62,19 @@ class AudioCostManager(Node):
         #255    :        Unknown
         
         mean = (250, 1000) # width , height
-        mean = (550, 1000) # width , height
-        covariance = [[300, 0],
-                    [0, 500]]
+        covariance = [[50, 0],
+                    [0, 50]]
 
         costs = gaussian_costmap(
             mean=mean,
             covariance=covariance,
             width=self.width,
             height=self.height,
-            max_cost=200
-        )
-    
+            max_cost=250,
+            min_cost=252
+        )    
         msg_cost.data = costs
         self.audio_cost_publisher_.publish(msg_cost)
-
         
         msg_grid = OccupancyGrid()
 
@@ -104,10 +102,10 @@ class AudioCostManager(Node):
 
         msg_grid.data = data
         self.audio_grid_publisher_.publish(msg_grid)
-    
-def gaussian_costmap(mean, covariance, width, height, max_cost=252):
+
+def gaussian_costmap(mean, covariance, width, height, max_cost=252, min_cost=0):
     """
-    Generate a Gaussian-distributed costmap.
+    Generate a Gaussian-distributed costmap with a minimum cost floor.
 
     Parameters
     ----------
@@ -121,6 +119,8 @@ def gaussian_costmap(mean, covariance, width, height, max_cost=252):
         Costmap height (Y dimension).
     max_cost : int
         Maximum cost value (Nav2: <= 252).
+    min_cost : int
+        Minimum cost for non-zero values.
 
     Returns
     -------
@@ -133,13 +133,11 @@ def gaussian_costmap(mean, covariance, width, height, max_cost=252):
     inv_cov = np.linalg.inv(cov)
     det_cov = np.linalg.det(cov)
 
-    # Normalization factor (not strictly required, but correct)
     norm = 1.0 / (2.0 * np.pi * np.sqrt(det_cov))
 
     costs = np.zeros(width * height, dtype=np.uint8)
-
-    max_val = 0.0
     values = np.zeros((height, width), dtype=float)
+    max_val = 0.0
 
     # Compute Gaussian values
     for j in range(height):
@@ -149,17 +147,24 @@ def gaussian_costmap(mean, covariance, width, height, max_cost=252):
             values[j, i] = val
             max_val = max(max_val, val)
 
-    # Normalize and scale to cost values
+    # Normalize to [0, 1]
     if max_val > 0.0:
-        values = values / max_val
+        values /= max_val
 
+    # Scale to [min_cost, max_cost]
     for j in range(height):
         for i in range(width):
             index = i + j * width
-            costs[index] = int(values[j, i] * max_cost)
+            v = values[j, i]
+
+            if v <= 0.0:
+                costs[index] = 0
+            else:
+                costs[index] = int(
+                    min_cost + v * (max_cost - min_cost)
+                )
 
     return costs.tolist()
-
 
 def main(args=None):
     rclpy.init(args=args)

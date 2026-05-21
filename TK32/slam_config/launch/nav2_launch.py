@@ -163,7 +163,8 @@ def generate_launch_description():
                     'behavior_server',
                     'waypoint_follower',
                     'velocity_smoother'
-                ]
+                ],
             }],
+            #arguments=['--ros-args', '--log-level', 'debug']
         ),
     ])
