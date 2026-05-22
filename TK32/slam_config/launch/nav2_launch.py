@@ -16,7 +16,7 @@ def generate_launch_description():
     bringup_dir = get_package_share_directory('slam_config')
 
     default_map = os.path.join(
-        bringup_dir, 'maps', 'map_6_1.yaml')
+        bringup_dir, 'maps', 'map_rt_clean.yaml')
 
     default_params = os.path.join(
         bringup_dir, 'config', 'nav2_params.yaml')

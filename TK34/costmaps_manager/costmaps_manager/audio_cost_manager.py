@@ -3,7 +3,7 @@ import rclpy
 from rclpy.node import Node
 from std_msgs.msg import UInt8MultiArray, Header
 from nav_msgs.msg import OccupancyGrid
-from geometry_msgs.msg import Pose
+from geometry_msgs.msg import Pose, Point
 import numpy as np
 
 class AudioCostManager(Node):
@@ -23,7 +23,8 @@ class AudioCostManager(Node):
         self.audio_grid_publisher_ = self.create_publisher(OccupancyGrid, '/costmaps_manager/audio_costs', 1)
 
         # Subscribers
-        self.subscription = self.create_subscription(OccupancyGrid, '/global_costmap/costmap', self.costmap_callback,1)
+        self.map_subscription = self.create_subscription(OccupancyGrid, '/global_costmap/costmap', self.costmap_callback,1)
+        self.point_subscription = self.create_subscription(Point, '/clicked_point', self.point_callback,1)
 
         # Timers
         self.timer = self.create_timer(1.0 / self.publish_rate, self.costs_publisher)
@@ -48,6 +49,12 @@ class AudioCostManager(Node):
                 f'resolution: {self.resolution:.3f} m | '
                 f'origin: ({self.origin.position.x:.2f}, {self.origin.position.y:.2f})'
             )
+    
+    def point_callback(self, msg):
+        self.get_logger().info('A point has been clicked!!')
+        self.get_logger().infor(msg)
+        
+
 
     def costs_publisher(self):
         if not (self.width and self.height):
@@ -61,7 +68,7 @@ class AudioCostManager(Node):
         #254    :        Collision guaranteed
         #255    :        Unknown
         
-        mean = (250, 1000) # width , height
+        mean = (554, 330) # width , height
         covariance = [[50, 0],
                     [0, 50]]
 
@@ -70,8 +77,8 @@ class AudioCostManager(Node):
             covariance=covariance,
             width=self.width,
             height=self.height,
-            max_cost=250,
-            min_cost=252
+            max_cost=252,
+            min_cost=150
         )    
         msg_cost.data = costs
         self.audio_cost_publisher_.publish(msg_cost)

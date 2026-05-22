@@ -150,9 +150,7 @@ def generate_launch_description():
 
 
     ### Launching nodes for Mapping
-    # ld.add_action(declare_slam_params_file)
-    # ld.add_action(mic_publisher_node)
-    #ld.add_action(realsense_node)
+    #ld.add_action(declare_slam_params_file)
     #ld.add_action(slam_node)
 
 
