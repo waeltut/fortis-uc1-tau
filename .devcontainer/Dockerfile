@@ -14,6 +14,7 @@ RUN apt-get update && apt-get install -y \
     curl \
     git \
     wget \
+    unzip \
     cmake \
     libusb-1.0-0-dev \
     pkg-config \
@@ -50,6 +51,7 @@ RUN apt-get update && apt-get install -y \
 # -------------------------
 # Build RealSense SDK (ARM)
 # -------------------------
+WORKDIR /opt
 RUN git clone https://github.com/IntelRealSense/librealsense.git /opt/librealsense \
     && cd /opt/librealsense \
     && git checkout v2.56.4 \
@@ -61,10 +63,36 @@ RUN git clone https://github.com/IntelRealSense/librealsense.git /opt/librealsen
     -DFORCE_LIBUVC=true \
     && make -j$(nproc) \
     && make install
+
+# -------------------------
+# Build Piper
+# -------------------------
+    # Install Piper (offline TTS)
+
+RUN mkdir -p /opt/piper && \
+    wget https://github.com/rhasspy/piper/releases/latest/download/piper_linux_aarch64.tar.gz -O /tmp/piper.tar.gz && \
+    tar -xvf /tmp/piper.tar.gz -C /opt && \
+    mv /opt/piper /opt/piper_tmp && \
+    mv /opt/piper_tmp /opt/piper && \
+    chmod +x /opt/piper/piper && \
+    rm /tmp/piper.tar.gz
+
+    # Make Piper global
+RUN ln -s /opt/piper/piper /usr/local/bin/piper
+
+    # Install voice model
+RUN mkdir -p /opt/piper/models && \
+    wget https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/medium/en_US-amy-medium.onnx -P /opt/piper/models && \
+    wget https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/medium/en_US-amy-medium.onnx.json -P /opt/piper/models
+
+    # Optional: set default model
+ENV PIPER_MODEL=/opt/piper/models/en_US-amy-medium.onnx
+
     
 # -------------------------
 # Python dependencies
 # -------------------------
+WORKDIR /
 COPY requirements.txt /
 RUN pip install --index-url https://download.pytorch.org/whl/cu130 \
     torch torchvision torchaudio

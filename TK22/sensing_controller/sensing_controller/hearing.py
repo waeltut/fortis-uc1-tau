@@ -33,15 +33,6 @@ class Hearing(Node):
         self.model = Model(model_path)
         self.recognizer = KaldiRecognizer(self.model, 16000)
 
-        # Open microphone stream
-        # self.stream = sd.InputStream(
-        #         samplerate=16000, 
-        #         channels=1, 
-        #         blocksize=4000, 
-        #         dtype='int16', 
-        #         callback=self.audio_callback)
-        # self.stream.start()
-
         # Ros
         self.get_logger().info("Node started. Listening to data from mic...")
         self.hearing_pub = self.create_publisher(hrn, "/steven/sensing/hearing", 1)

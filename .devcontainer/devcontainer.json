@@ -49,6 +49,7 @@
     "--group-add", "video",
     "--user", "1000:1000",
     "--device", "/dev/bus/usb",
+    "--device", "/dev/snd",
     "-e", "PULSE_SERVER=unix:/run/user/1000/pulse/native",
     "-e", "XDG_RUNTIME_DIR=/run/user/1000",
     "-v", "/run/user/1000/pulse:/run/user/1000/pulse",
