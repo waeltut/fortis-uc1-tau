@@ -5,6 +5,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 ARG USERNAME=fortis_dev
 ARG UID=1000
 ARG GID=$UID
+ARG ROS_DOMAIN_ID=20
 
 # -------------------------
 # Base system dependencies
@@ -154,6 +155,7 @@ RUN /bin/bash -c "source /opt/ros/humble/setup.bash && colcon build --symlink-in
 
 RUN echo "source /opt/ros/humble/setup.bash" >> /home/$USERNAME/.bashrc
 RUN echo "source /home/$USERNAME/ros2_ws/install/setup.bash" >> /home/$USERNAME/.bashrc
+RUN echo "export ROS_DOMAIN_ID=$ROS_DOMAIN_ID" >> /home/$USERNAME/.bashrc
 
 COPY ./ros2_entrypoint.sh /
 ENTRYPOINT ["/ros2_entrypoint.sh"]

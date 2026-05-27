@@ -25,7 +25,8 @@ def generate_launch_description():
             'enable_infra2': False,
             'depth_module.depth_profile': '640x480x15',
             'rgb_camera.color_profile': '640x480x15',
-            'pointcloud.enable': False,
+            'align_depth.enable': True,
+            'pointcloud.enable': True,
             'enable_imu': False
         }]
     )
@@ -130,7 +131,7 @@ def generate_launch_description():
 
     ### Launching nodes in parallel (uncomment if you want to launch all nodes at once) ###
     # ld.add_action(foxglove_bridge_node)
-    # ld.add_action(realsense_node)
+    #ld.add_action(realsense_node)
     # ld.add_action(mic_publisher_node)
     # ld.add_action(hearing_node)
     # ld.add_action(vision_node)

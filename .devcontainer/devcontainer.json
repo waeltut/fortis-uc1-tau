@@ -39,27 +39,47 @@
         "DISPLAY": "${localEnv:DISPLAY}"
         //"QT_X11_NO_MITSHM": "1"
   },
-  "mounts": [],
+  "mounts": [
+    "source=${env:HOME}/.ssh,target=/home/fortis_dev/.ssh,type=bind"
+],
 "runArgs": [
     "--runtime=nvidia",
     "--gpus=all",
     "--network=host",
     "--ipc=host", // For shared memory access ROS2 DDS
+
     "--group-add", "audio",
     "--group-add", "video",
     "--user", "1000:1000",
-    "--device", "/dev/bus/usb",
-    "--device", "/dev/snd",
-    "-e", "PULSE_SERVER=unix:/run/user/1000/pulse/native",
-    "-e", "XDG_RUNTIME_DIR=/run/user/1000",
-    "-v", "/run/user/1000/pulse:/run/user/1000/pulse",
+
+    
+    "--mount=type=bind,source=/dev/bus/usb,target=/dev/bus/usb",
+    "--device-cgroup-rule=c 189:* rmw",
+    "--device-cgroup-rule=c 81:* rmw",
+        
+    "--mount=type=bind,source=/dev/snd,target=/dev/snd",
+    "--device-cgroup-rule=c 116:* rmw",
+
+
+    "--mount=type=bind,source=/run/udev,target=/run/udev,readonly",
+
+    "-v", "/dev/shm:/dev/shm",
     "-v", "/tmp/.X11-unix:/tmp/.X11-unix:rw",
-    "-v", "/dev/shm:/dev/shm", // For shared memory access ROS2 DDS
-    "--device", "/dev/video0",
-    "--device", "/dev/video1",
-    "--device", "/dev/video2",
-    "--device", "/dev/video3",
-    "--device", "/dev/video4",
-    "--device", "/dev/video5"
+
+
+
+    // "--device", "/dev/bus/usb",
+    // "--device", "/dev/snd",
+    // "-e", "PULSE_SERVER=unix:/run/user/1000/pulse/native",
+    // "-e", "XDG_RUNTIME_DIR=/run/user/1000",
+    // "-v", "/run/user/1000/pulse:/run/user/1000/pulse",
+    // "-v", "/tmp/.X11-unix:/tmp/.X11-unix:rw",
+    // "-v", "/dev/shm:/dev/shm", // For shared memory access ROS2 DDS
+    // "--device", "/dev/video0",
+    // "--device", "/dev/video1",
+    // "--device", "/dev/video2",
+    // "--device", "/dev/video3",
+    // "--device", "/dev/video4",
+    // "--device", "/dev/video5"
     ]
 }
