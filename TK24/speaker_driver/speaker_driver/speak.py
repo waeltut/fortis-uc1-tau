@@ -11,7 +11,7 @@ class PiperTTSNode(Node):
 
         # Parameters
         self.model = os.getenv("PIPER_MODEL", "/opt/piper/models/en_US-amy-medium.onnx")
-        self.device = "plughw:2,0"
+        self.device = "plughw:3,0"
 
         # Subscriber
         self.subscription = self.create_subscription(

@@ -58,13 +58,13 @@ class Vision(Node):
         self.detector = cv2.aruco.ArucoDetector(aruco_dict, aruco_params)
 
         # Model    Figure those nvidia-things out
-        pkg_path = get_package_share_directory('sensing_controller')
+        pkg_path = get_package_share_directory('human_perception')
         model_path = os.path.join(pkg_path, 'models', 'yolov8n.pt')
         #engine_path = os.path.join(pkg_path, 'models')
         self.model = YOLO(model_path)
         self.model.fuse()
         dummy = np.zeros((480, 640, 3), dtype=np.uint8)
-        self.model.predict(dummy, classes=[0], device='cuda', verbose=False)
+        self.model.predict(dummy, classes=[0], device='cpu', verbose=False)
 
         # Recording
         if self.record:
@@ -93,6 +93,12 @@ class Vision(Node):
         # Optimization testing
         self.last_loop = self.get_clock().now()
         self.get_logger().info(f"{torch.version.cuda}")
+
+
+        print("CUDA:", torch.cuda.is_available())
+        print("CUDA version:", torch.version.cuda)
+
+
         if torch.cuda.is_available():
             n_gpus = torch.cuda.device_count()
             for i in range(n_gpus):

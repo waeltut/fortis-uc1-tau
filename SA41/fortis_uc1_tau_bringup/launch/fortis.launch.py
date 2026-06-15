@@ -131,7 +131,7 @@ def generate_launch_description():
 
     ### Launching nodes in parallel (uncomment if you want to launch all nodes at once) ###
     # ld.add_action(foxglove_bridge_node)
-    #ld.add_action(realsense_node)
+    ld.add_action(realsense_node)
     # ld.add_action(mic_publisher_node)
     # ld.add_action(hearing_node)
     # ld.add_action(vision_node)
@@ -139,7 +139,7 @@ def generate_launch_description():
     # ld.add_action(quality_assessment_node)
     # ld.add_action(mir_launch)
     # ld.add_action(slam_node)
-    ld.add_action(nav2_launch)
+    #ld.add_action(nav2_launch)
     # ld.add_action(basic_move_node)
     # ld.add_action(coordinator_node)
     # ld.add_action(aggregate_node)

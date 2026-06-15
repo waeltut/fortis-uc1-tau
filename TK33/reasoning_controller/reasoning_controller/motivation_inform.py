@@ -9,6 +9,7 @@ from fortis_interfaces.msg import Proximity as prx
 import numpy as np
 import skfuzzy as fuzz
 from skfuzzy import control as ctrl
+import matplotlib.pyplot as plt
 
 
 class Motivation(Node):
@@ -35,11 +36,20 @@ class Motivation(Node):
         
         ## Fuzzy ##
         # Input
-        persistent_distance_to_obstacle = ctrl.Antecedent(np.arange(0, 1.01, 0.01), 'persistent_distance_to_obstacle')
+        min_persistent_distance_to_obstacle = 0
+        max_persistent_distance_to_obstacle = 1
+        step_persistent_distance_to_obstacle = 0.01
+
+        min_human_visible = 0
+        max_human_visible = 1
+        step_human_visible = 0.1
+
+        persistent_distance_to_obstacle = ctrl.Antecedent(np.arange(min_persistent_distance_to_obstacle, max_persistent_distance_to_obstacle+step_persistent_distance_to_obstacle, step_persistent_distance_to_obstacle), 'persistent_distance_to_obstacle')
         persistent_distance_to_obstacle['low']  = fuzz.gaussmf(persistent_distance_to_obstacle.universe, 0.15, 0.12)
         persistent_distance_to_obstacle['med']  = fuzz.gaussmf(persistent_distance_to_obstacle.universe, 0.45, 0.2)
         persistent_distance_to_obstacle['high'] = fuzz.gaussmf(persistent_distance_to_obstacle.universe, 0.80, 0.3)
-        human_visible = ctrl.Antecedent(np.arange(0, 1.1, 0.1), 'human_visible')
+
+        human_visible = ctrl.Antecedent(np.arange(min_human_visible, max_human_visible+step_human_visible, step_human_visible), 'human_visible')
         human_visible['no']  = fuzz.gaussmf(human_visible.universe, 0, 0.2)
         human_visible['yes'] = fuzz.gaussmf(human_visible.universe, 1, 0.2)
 
@@ -65,6 +75,32 @@ class Motivation(Node):
 
         # Run
         self.create_timer(0.10, self.fuzzy_inference)
+
+        # Plotting
+        # upsampled_x = np.linspace(min_persistent_distance_to_obstacle, max_persistent_distance_to_obstacle, max_persistent_distance_to_obstacle-min_persistent_distance_to_obstacle+1)
+        # upsampled_y = np.linspace(min_human_visible, max_human_visible, max_human_visible-min_human_visible+1)
+        # x, y = np.meshgrid(upsampled_x, upsampled_y)
+        # z = np.zeros_like(x)
+
+        # for j, x_ in enumerate(upsampled_x):
+        #     for i, y_ in enumerate(upsampled_y):
+        #         self.sim.input['persistent_distance_to_obstacle'] = x[i, j]
+        #         self.sim.input['human_visible'] = y[i, j]
+        #         self.sim.compute()
+        #         z[i, j] = self.sim.output['inform_motivation']
+
+        # fig = plt.figure(figsize=(8, 8))
+        # ax = fig.add_subplot(111, projection='3d')
+
+        # surf = ax.plot_surface(x, y, z, rstride=1, cstride=1, cmap='viridis',
+        #                     linewidth=0.4, antialiased=True)
+
+        # cset = ax.contourf(x, y, z, zdir='z', offset=-2.5, cmap='viridis', alpha=0.5)
+        # cset = ax.contourf(x, y, z, zdir='x', offset=3, cmap='viridis', alpha=0.5)
+        # cset = ax.contourf(x, y, z, zdir='y', offset=3, cmap='viridis', alpha=0.5)
+
+        # ax.view_init(30, 200)
+        # plt.show()    
     
 
     ## Callbacks ##

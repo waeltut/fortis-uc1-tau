@@ -2,7 +2,7 @@ from glob import glob
 import os
 from setuptools import find_packages, setup
 
-package_name = 'sensing_controller'
+package_name = 'human_perception'
 
 model_data_files = []
 for root, dirs, files in os.walk("models"):     # Thank you Mr. GPT
@@ -36,8 +36,8 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'hearing = sensing_controller.hearing:main',
-            'vision = sensing_controller.vision:main',
+            'hearing = human_perception.hearing:main',
+            'vision = human_perception.vision:main',
         ],
     },
 )

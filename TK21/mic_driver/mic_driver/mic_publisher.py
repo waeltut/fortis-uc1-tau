@@ -13,7 +13,8 @@ class MicPublisher(Node):
         super().__init__('mic_publisher')
         
         # ✅ OPTIMIZED FOR SPEECH + LOW BANDWIDTH
-        self.sample_rate = 16000   # 16kHz = STT standard
+        self.microphone_index = get_mic_device_index("Yeti GX")
+        self.sample_rate = 48000      # 48 kHz = STT standard
         self.channels = 1
         self.block_size = 2048     # ~8Hz publish rate
         
@@ -24,6 +25,7 @@ class MicPublisher(Node):
         self.audio_timeout = 1_500_000_000  # nanoseconds  =1.5 seconds
 
         self.stream = sd.InputStream(
+            device=self.microphone_index,
             channels=self.channels,
             samplerate=self.sample_rate,
             blocksize=self.block_size,
@@ -32,7 +34,7 @@ class MicPublisher(Node):
         self.stream.start()
         self.create_timer(5.0, self.health_check)
         
-        self.get_logger().info(f'Streaming 16kHz mic @ ~8Hz ({self.sample_rate}/{self.block_size})')
+        self.get_logger().info(f'Streaming 48kHz mic @ ~8Hz ({self.sample_rate}/{self.block_size})')
     
     def audio_callback(self, indata, frames, time, status):
         if status:
@@ -81,6 +83,7 @@ class MicPublisher(Node):
     def try_start_stream(self):
         try:
             self.stream = sd.InputStream(
+                device=self.microphone_index,
                 channels=self.channels,
                 samplerate=self.sample_rate,
                 blocksize=self.block_size,
@@ -92,7 +95,12 @@ class MicPublisher(Node):
             self.get_logger().error(f"Failed to restart mic stream: {e}")
             self.stream = None
 
-
+def get_mic_device_index(name_hint="Yeti GX"):
+    devices = sd.query_devices()
+    for i, dev in enumerate(devices):
+        if name_hint.lower() in dev['name'].lower() and dev['max_input_channels'] > 0:
+            return i
+    raise RuntimeError(f"Microphone '{name_hint}' not found")
 
 def main(args=None):
     rclpy.init(args=args)

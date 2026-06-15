@@ -53,8 +53,8 @@ bt_navigator:
     global_frame: map
     robot_base_frame: base_footprint
     odom_topic: /odom
-    bt_loop_duration: 10
-    default_server_timeout: 20
+    bt_loop_duration: 20
+    default_server_timeout: 25
     wait_for_service_timeout: 1000
     # 'default_nav_through_poses_bt_xml' and 'default_nav_to_pose_bt_xml' are use defaults:
     # nav2_bt_navigator/navigate_to_pose_w_replanning_and_recovery.xml
@@ -147,7 +147,7 @@ controller_server:
       stateful: True
       plugin: "nav2_controller::SimpleGoalChecker"
       xy_goal_tolerance: 0.40
-      yaw_goal_tolerance: 0.40
+      yaw_goal_tolerance: 0.1
     # DWB parameters
     FollowPath:
       plugin: "dwb_core::DWBLocalPlanner"
@@ -166,13 +166,13 @@ controller_server:
       max_vel_theta: 1.0
       # Add high threshold velocity for turtlebot 3 issue.
       # https://github.com/ROBOTIS-GIT/turtlebot3_simulations/issues/75
-      acc_lim_x: 1.0
+      acc_lim_x: 0.4
       acc_lim_y: 0.0
-      acc_lim_theta: 2.0
+      acc_lim_theta: 1.0
 
       decel_lim_x: -2.5
       decel_lim_y: 0.0
-      decel_lim_theta: -2.0
+      decel_lim_theta: -1.0
 
       vx_samples: 15
       vy_samples: 1
@@ -234,7 +234,7 @@ local_costmap:
           max_obstacle_height: 2.0
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        inflation_radius: 0.5
+        inflation_radius: 0.35
         cost_scaling_factor: 10.0
       always_send_full_costmap: True
       transform_tolerance: 0.2
@@ -275,8 +275,8 @@ global_costmap:
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         enabled: true
-        inflation_radius: 0.6
-        cost_scaling_factor: 3.0
+        inflation_radius: 1.0
+        cost_scaling_factor: 5.0
       audio_layer:
         plugin: "adaptive_layers::AudioLayer"
         enabled: true
@@ -303,7 +303,7 @@ map_saver:
 
 planner_server:
   ros__parameters:
-    expected_planner_frequency: 20.0
+    expected_planner_frequency: 10.0
     #use_sim_time: True     # Use for Rosbags
     use_sim_time: False     # Use for real-time
     planner_plugins: ["GridBased"]

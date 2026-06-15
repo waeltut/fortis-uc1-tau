@@ -10,13 +10,14 @@ import math
 import numpy as np
 import skfuzzy as fuzz
 from skfuzzy import control as ctrl
+import matplotlib.pyplot as plt
 
 class Motivation(Node):
     def __init__(self):
         # Ros
         super().__init__("motivation_work")
-        self.motivation_pub = self.create_publisher(Float32, "/steven/reasoning/motivation_work", 1)
-        self.motivation_pub = self.create_publisher(Float64, "/steven/reasoning/dist_goal", 1)
+        self.motivation_pub = self.create_publisher(Float32, "/reasoning/motivation_work", 1)
+        self.motivation_pub = self.create_publisher(Float64, "/reasoning/dist_goal", 1)
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
         self.create_subscription(Bool, "/steven/movement/work_complete", self.work_callback, 1)
@@ -35,12 +36,22 @@ class Motivation(Node):
 
         ## Fuzzy
         # Input
-        time_since_last_worked = ctrl.Antecedent(np.arange(0, 180.1, 0.1), 'time_since_last_worked')
+
+        min_time_since_last_worked = 0
+        max_time_since_last_worked = 180
+        step_time_since_last_worked = 0.1
+        
+        min_distance_to_goal = 0
+        max_distance_to_goal = 8
+        step_distance_to_goal = 0.01
+
+        time_since_last_worked = ctrl.Antecedent(np.arange(min_time_since_last_worked, max_time_since_last_worked+step_time_since_last_worked, step_time_since_last_worked), 'time_since_last_worked')
         time_since_last_worked['low']  = fuzz.gaussmf(time_since_last_worked.universe, 0.0, 10.0)
         time_since_last_worked['med']  = fuzz.gaussmf(time_since_last_worked.universe, 60.0, 20.0)
         time_since_last_worked['high'] = fuzz.gaussmf(time_since_last_worked.universe, 100.0, 30.0)
         time_since_last_worked['very_high'] = fuzz.gaussmf(time_since_last_worked.universe, 180.0, 40.0)
-        distance_to_goal = ctrl.Antecedent(np.arange(0, 8.01, 0.01), 'distance_to_goal')
+
+        distance_to_goal = ctrl.Antecedent(np.arange(min_distance_to_goal, max_distance_to_goal+step_distance_to_goal, step_distance_to_goal), 'distance_to_goal')
         distance_to_goal['low']  = fuzz.gaussmf(distance_to_goal.universe, 0.0, 2.0)
         distance_to_goal['med']  = fuzz.gaussmf(distance_to_goal.universe, 4.0, 2.0)
         distance_to_goal['high'] = fuzz.gaussmf(distance_to_goal.universe, 8.0, 2.0)
@@ -69,7 +80,33 @@ class Motivation(Node):
 
         # Run
         self.create_timer(0.10, self.fuzzy_inference)
-    
+
+        # Plotting
+        upsampled_x = np.linspace(min_time_since_last_worked, max_time_since_last_worked, max_time_since_last_worked-min_time_since_last_worked+1)        # time since last 
+        upsampled_y = np.linspace(min_distance_to_goal, max_distance_to_goal, max_distance_to_goal-min_distance_to_goal+1)            # distance to goal
+        x, y = np.meshgrid(upsampled_x, upsampled_y)
+        z = np.zeros_like(x)
+
+        for j, x_ in enumerate(upsampled_x):
+            for i, y_ in enumerate(upsampled_y):
+                self.sim.input['time_since_last_worked'] = x[i, j]
+                self.sim.input['distance_to_goal'] = y[i, j]
+                self.sim.compute()
+                z[i, j] = self.sim.output['work_motivation']
+
+        fig = plt.figure(figsize=(8, 8))
+        ax = fig.add_subplot(111, projection='3d')
+
+        surf = ax.plot_surface(x, y, z, rstride=1, cstride=1, cmap='viridis',
+                            linewidth=0.4, antialiased=True)
+
+        cset = ax.contourf(x, y, z, zdir='z', offset=-2.5, cmap='viridis', alpha=0.5)
+        cset = ax.contourf(x, y, z, zdir='x', offset=3, cmap='viridis', alpha=0.5)
+        cset = ax.contourf(x, y, z, zdir='y', offset=3, cmap='viridis', alpha=0.5)
+
+        ax.view_init(30, 200)
+        plt.show()    
+        
 
     def work_callback(self, msg):
         if msg:
@@ -105,8 +142,6 @@ class Motivation(Node):
             self.motivation_pub.publish(self.msg)
         except:
             pass
-
-
 
 def main(args=None):
     rclpy.init(args=args)
