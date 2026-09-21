@@ -189,8 +189,8 @@ class Publisher(object):
                 1,
             )
             node.get_logger().info(f"Publishing to: {self.topic['topic']}")
-        except:
-            pass
+        except Exception as e:
+            node.get_logger().error(f"Publisher setup failed for {topic['topic']}: {repr(e)}")
     
     # When info from ros2, then publish remotely
     def callback(self, msg):
@@ -232,7 +232,7 @@ class Subscriber(object):
                 self.sub_remote.subscribe(self.callback)
             node.get_logger().info(f"Subscribed to: {self.topic['topic']}")
         except Exception as e:
-            self.get_logger().error(str(e))
+            node.get_logger().error(str(e))
     
     # When info from mir, then publish locally
     def callback(self, msg):
@@ -289,7 +289,7 @@ class Subscriber(object):
 
 # The bridge
 class MiR_Bridge(Node):
-    def __init__(self, rosbridge_host='192.168.12.20', rosbridge_port=9090):
+    def __init__(self, rosbridge_host='192.168.1.14', rosbridge_port=9090):
         super().__init__('mir_bridge')
         
         try:

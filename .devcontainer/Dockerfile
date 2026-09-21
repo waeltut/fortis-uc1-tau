@@ -95,9 +95,20 @@ ENV PIPER_MODEL=/opt/piper/models/en_US-amy-medium.onnx
 # -------------------------
 WORKDIR /
 COPY requirements.txt /
-RUN pip install --index-url https://download.pytorch.org/whl/cu130 \
+
+# Keep Python packaging tools mutually compatible.
+# setuptools >= 71 requires packaging >= 22 for canonicalize_version(..., strip_trailing_zero=...)
+RUN python3 -m pip install --upgrade \
+    pip \
+    setuptools \
+    wheel \
+    "packaging>=22"
+
+RUN python3 -m pip install --index-url https://download.pytorch.org/whl/cu130 \
     torch torchvision torchaudio
-RUN pip install --no-cache-dir -r requirements.txt
+
+RUN python3 -m pip install --no-cache-dir -r requirements.txt
+
 RUN python3 -m pip install --no-cache-dir roslibpy
 
 # -------------------------
