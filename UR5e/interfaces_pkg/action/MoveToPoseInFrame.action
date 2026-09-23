@@ -1,0 +1,20 @@
+# Goal
+bool use_cartesian_path
+bool allow_exec_partial_path
+string frame
+float32 x
+float32 y
+float32 z
+float32 rx
+float32 ry
+float32 rz
+float32 rw
+float32 velocity_scaling_factor
+
+---
+# Result
+bool success
+
+---
+# Feedback
+

@@ -1,0 +1,377 @@
+controller_manager:
+  ros__parameters:
+
+    update_rate: 100 # Hz
+
+    # left_joint_state_broadcaster:
+    #   type: joint_state_broadcaster/JointStateBroadcaster
+
+    joint_state_broadcaster:
+      type: joint_state_broadcaster/JointStateBroadcaster
+
+
+    left_io_and_status_controller:
+      type: ur_controllers/GPIOController
+
+    speed_scaling_state_broadcaster:
+      type: ur_controllers/SpeedScalingStateBroadcaster
+
+    # left_speed_scaling_state_broadcaster:
+    #   type: ur_controllers/SpeedScalingStateBroadcaster
+
+    # force_torque_sensor_broadcaster:
+    #   type: ur_controllers/ForceTorqueStateBroadcaster
+
+    left_force_torque_sensor_broadcaster:
+      type: ur_controllers/ForceTorqueStateBroadcaster
+
+    left_joint_trajectory_controller:
+      type: joint_trajectory_controller/JointTrajectoryController
+
+    left_scaled_joint_trajectory_controller:
+      type: ur_controllers/ScaledJointTrajectoryController
+
+    left_forward_velocity_controller:
+      type: velocity_controllers/JointGroupVelocityController
+
+    left_forward_position_controller:
+      type: position_controllers/JointGroupPositionController
+
+    left_cartesian_motion_controller:
+      type: cartesian_motion_controller/CartesianMotionController
+
+    # right_joint_state_broadcaster:
+    #   type: joint_state_broadcaster/JointStateBroadcaster
+
+    right_io_and_status_controller:
+      type: ur_controllers/GPIOController
+
+    # right_speed_scaling_state_broadcaster:
+    #   type: ur_controllers/SpeedScalingStateBroadcaster
+
+    right_force_torque_sensor_broadcaster:
+      type: ur_controllers/ForceTorqueStateBroadcaster
+
+    right_joint_trajectory_controller:
+      type: joint_trajectory_controller/JointTrajectoryController
+
+    right_scaled_joint_trajectory_controller:
+      type: ur_controllers/ScaledJointTrajectoryController
+
+    right_forward_velocity_controller:
+      type: velocity_controllers/JointGroupVelocityController
+
+    right_forward_position_controller:
+      type: position_controllers/JointGroupPositionController
+
+    right_cartesian_motion_controller:
+      type: cartesian_motion_controller/CartesianMotionController
+
+
+    left_motion_control_handle:
+      type: cartesian_controller_handles/MotionControlHandle
+
+    right_motion_control_handle:
+      type: cartesian_controller_handles/MotionControlHandle
+
+
+
+joint_state_broadcaster:
+    ros__parameters:
+      arm_id: "ur"
+      joints:
+        - left_shoulder_pan_joint
+        - left_shoulder_lift_joint
+        - left_elbow_joint
+        - left_wrist_1_joint
+        - left_wrist_2_joint
+        - left_wrist_3_joint
+        - right_shoulder_pan_joint
+        - right_shoulder_lift_joint
+        - right_elbow_joint
+        - right_wrist_1_joint
+        - right_wrist_2_joint
+        - right_wrist_3_joint
+
+speed_scaling_state_broadcaster:
+  ros__parameters:
+    state_publish_rate: 100.0
+
+# left_speed_scaling_state_broadcaster:
+#   ros__parameters:
+#     state_publish_rate: 100.0
+
+# right_speed_scaling_state_broadcaster:
+#   ros__parameters:
+#     state_publish_rate: 100.0
+
+
+left_cartesian_motion_controller:
+  ros__parameters:
+
+    # See the cartesian_compliance_controller
+    end_effector_link: "left_tcp"
+    robot_base_link: "left_base_link"
+    joints:
+      - left_shoulder_pan_joint
+      - left_shoulder_lift_joint
+      - left_elbow_joint
+      - left_wrist_1_joint
+      - left_wrist_2_joint
+      - left_wrist_3_joint
+
+    # See the cartesian_compliance_controller
+    command_interfaces:
+      - position
+        #- velocity
+
+    solver:
+        error_scale: 1.0
+        iterations: 10
+        publish_state_feedback: True
+
+    pd_gains:
+        trans_x: {p: 1.0}
+        trans_y: {p: 1.0}
+        trans_z: {p: 1.0}
+        rot_x: {p: 0.5}
+        rot_y: {p: 0.5}
+        rot_z: {p: 0.5}
+
+right_cartesian_motion_controller:
+  ros__parameters:
+
+    # See the cartesian_compliance_controller
+    end_effector_link: "right_tcp"
+    robot_base_link: "right_base_link"
+    joints:
+      - right_shoulder_pan_joint
+      - right_shoulder_lift_joint
+      - right_elbow_joint
+      - right_wrist_1_joint
+      - right_wrist_2_joint
+      - right_wrist_3_joint
+
+    # See the cartesian_compliance_controller
+    command_interfaces:
+      - position
+        #- velocity
+
+    solver:
+        error_scale: 1.0
+        iterations: 10
+        publish_state_feedback: True
+
+    pd_gains:
+        trans_x: {p: 1.0}
+        trans_y: {p: 1.0}
+        trans_z: {p: 1.0}
+        rot_x: {p: 0.5}
+        rot_y: {p: 0.5}
+        rot_z: {p: 0.5}
+
+
+left_force_torque_sensor_broadcaster:
+  ros__parameters:
+    sensor_name: left_tcp_fts_sensor
+    state_interface_names:
+      - force.x
+      - force.y
+      - force.z
+      - torque.x
+      - torque.y
+      - torque.z
+    frame_id: left_tool0
+    topic_name: left_ft_data
+
+right_force_torque_sensor_broadcaster:
+  ros__parameters:
+    sensor_name: right_tcp_fts_sensor
+    state_interface_names:
+      - force.x
+      - force.y
+      - force.z
+      - torque.x
+      - torque.y
+      - torque.z
+    frame_id: right_tool0
+    topic_name: right_ft_data
+
+
+left_joint_trajectory_controller:
+  ros__parameters:
+    joints:
+      - left_shoulder_pan_joint
+      - left_shoulder_lift_joint
+      - left_elbow_joint
+      - left_wrist_1_joint
+      - left_wrist_2_joint
+      - left_wrist_3_joint
+    command_interfaces:
+      - position
+    state_interfaces:
+      - position
+      - velocity
+    state_publish_rate: 100.0
+    action_monitor_rate: 20.0
+    allow_partial_joints_goal: false
+    constraints:
+      stopped_velocity_tolerance: 0.2
+      goal_time: 0.0
+      left_shoulder_pan_joint: { trajectory: 0.2, goal: 0.1 }
+      left_shoulder_lift_joint: { trajectory: 0.2, goal: 0.1 }
+      left_elbow_joint: { trajectory: 0.2, goal: 0.1 }
+      left_wrist_1_joint: { trajectory: 0.2, goal: 0.1 }
+      left_wrist_2_joint: { trajectory: 0.2, goal: 0.1 }
+      left_wrist_3_joint: { trajectory: 0.2, goal: 0.1 }
+
+right_joint_trajectory_controller:
+  ros__parameters:
+    joints:
+      - right_shoulder_pan_joint
+      - right_shoulder_lift_joint
+      - right_elbow_joint
+      - right_wrist_1_joint
+      - right_wrist_2_joint
+      - right_wrist_3_joint
+    command_interfaces:
+      - position
+    state_interfaces:
+      - position
+      - velocity
+    state_publish_rate: 100.0
+    action_monitor_rate: 20.0
+    allow_partial_joints_goal: false
+    constraints:
+      stopped_velocity_tolerance: 0.2
+      goal_time: 0.0
+      right_shoulder_pan_joint: { trajectory: 0.2, goal: 0.1 }
+      right_shoulder_lift_joint: { trajectory: 0.2, goal: 0.1 }
+      right_elbow_joint: { trajectory: 0.2, goal: 0.1 }
+      right_wrist_1_joint: { trajectory: 0.2, goal: 0.1 }
+      right_wrist_2_joint: { trajectory: 0.2, goal: 0.1 }
+      right_wrist_3_joint: { trajectory: 0.2, goal: 0.1 }
+
+
+
+left_scaled_joint_trajectory_controller:
+  ros__parameters:
+    joints:
+      - left_shoulder_pan_joint
+      - left_shoulder_lift_joint
+      - left_elbow_joint
+      - left_wrist_1_joint
+      - left_wrist_2_joint
+      - left_wrist_3_joint
+    command_interfaces:
+      - position
+    state_interfaces:
+      - position
+      - velocity
+    state_publish_rate: 100.0
+    action_monitor_rate: 20.0
+    allow_partial_joints_goal: false
+    constraints:
+      stopped_velocity_tolerance: 0.2
+      goal_time: 0.0
+      left_shoulder_pan_joint: { trajectory: 0.2, goal: 0.1 }
+      left_shoulder_lift_joint: { trajectory: 0.2, goal: 0.1 }
+      left_elbow_joint: { trajectory: 0.2, goal: 0.1 }
+      left_wrist_1_joint: { trajectory: 0.2, goal: 0.1 }
+      left_wrist_2_joint: { trajectory: 0.2, goal: 0.1 }
+      left_wrist_3_joint: { trajectory: 0.2, goal: 0.1 }
+
+right_scaled_joint_trajectory_controller:
+  ros__parameters:
+    joints:
+      - right_shoulder_pan_joint
+      - right_shoulder_lift_joint
+      - right_elbow_joint
+      - right_wrist_1_joint
+      - right_wrist_2_joint
+      - right_wrist_3_joint
+    command_interfaces:
+      - position
+    state_interfaces:
+      - position
+      - velocity
+    state_publish_rate: 100.0
+    action_monitor_rate: 20.0
+    allow_partial_joints_goal: false
+    constraints:
+      stopped_velocity_tolerance: 0.2
+      goal_time: 0.0
+      right_shoulder_pan_joint: { trajectory: 0.2, goal: 0.1 }
+      right_shoulder_lift_joint: { trajectory: 0.2, goal: 0.1 }
+      right_elbow_joint: { trajectory: 0.2, goal: 0.1 }
+      right_wrist_1_joint: { trajectory: 0.2, goal: 0.1 }
+      right_wrist_2_joint: { trajectory: 0.2, goal: 0.1 }
+      right_wrist_3_joint: { trajectory: 0.2, goal: 0.1 }
+
+left_forward_velocity_controller:
+  ros__parameters:
+    joints:
+      - left_shoulder_pan_joint
+      - left_shoulder_lift_joint
+      - left_elbow_joint
+      - left_wrist_1_joint
+      - left_wrist_2_joint
+      - left_wrist_3_joint
+    interface_name: velocity
+
+right_forward_velocity_controller:
+  ros__parameters:
+    joints:
+      - right_shoulder_pan_joint
+      - right_shoulder_lift_joint
+      - right_elbow_joint
+      - right_wrist_1_joint
+      - right_wrist_2_joint
+      - right_wrist_3_joint
+    interface_name: velocity
+
+left_forward_position_controller:
+  ros__parameters:
+    joints:
+      - left_shoulder_pan_joint
+      - left_shoulder_lift_joint
+      - left_elbow_joint
+      - left_wrist_1_joint
+      - left_wrist_2_joint
+      - left_wrist_3_joint
+
+right_forward_position_controller:
+  ros__parameters:
+    joints:
+      - right_shoulder_pan_joint
+      - right_shoulder_lift_joint
+      - right_elbow_joint
+      - right_wrist_1_joint
+      - right_wrist_2_joint
+      - right_wrist_3_joint
+
+left_motion_control_handle:
+  ros__parameters:
+    end_effector_link: "left_tcp"
+    robot_base_link: "left_base_link"
+    ft_sensor_ref_link: "left_sensor_base"
+    joints:
+      - left_shoulder_pan_joint
+      - left_shoulder_lift_joint
+      - left_elbow_joint
+      - left_wrist_1_joint
+      - left_wrist_2_joint
+      - left_wrist_3_joint
+
+right_motion_control_handle:
+  ros__parameters:
+    end_effector_link: "right_tcp"
+    robot_base_link: "right_base_link"
+    ft_sensor_ref_link: "right_sensor_base"
+    joints:
+      - right_shoulder_pan_joint
+      - right_shoulder_lift_joint
+      - right_elbow_joint
+      - right_wrist_1_joint
+      - right_wrist_2_joint
+      - right_wrist_3_joint      

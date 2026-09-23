@@ -1,0 +1,12 @@
+# Goal
+string object
+float32 window_size_seconds
+
+---
+# Result
+bool success
+geometry_msgs/Pose avg_pose
+
+---
+# Feedback
+

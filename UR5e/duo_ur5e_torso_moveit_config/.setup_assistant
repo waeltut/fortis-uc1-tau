@@ -1,0 +1,25 @@
+moveit_setup_assistant_config:
+  urdf:
+    package: duo_ur
+    relative_path: urdf/duo_ur_onehand.urdf.xacro
+  srdf:
+    relative_path: config/duo_ur_onehand.srdf
+  package_settings:
+    author_name: kido
+    author_email: hoang.m.pham@tuni.fi
+    generated_timestamp: 1759745274
+  control_xacro:
+    command:
+      - position
+    state:
+      - position
+      - velocity
+  modified_urdf:
+    xacros:
+      - control_xacro
+  control_xacro:
+    command:
+      - position
+    state:
+      - position
+      - velocity

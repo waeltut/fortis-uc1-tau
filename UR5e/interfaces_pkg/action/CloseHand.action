@@ -1,0 +1,11 @@
+# Goal
+string grasp_type
+int32[6] max_currents
+
+---
+# Result
+bool success
+
+---
+# Feedback
+
