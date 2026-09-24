@@ -66,6 +66,8 @@
     "-v", "/dev/shm:/dev/shm",
     "-v", "/tmp/.X11-unix:/tmp/.X11-unix:rw",
 
+    "--device=/dev/hand_L:/dev/hand_L",
+    "--device=/dev/hand_R:/dev/hand_R",
 
 
     // "--device", "/dev/bus/usb",
