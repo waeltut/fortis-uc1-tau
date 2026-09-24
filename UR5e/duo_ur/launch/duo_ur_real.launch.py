@@ -710,7 +710,7 @@ def generate_launch_description():
     declared_arguments.append(
         DeclareLaunchArgument(
             "tf_prefix_1",
-            default_value="left_",
+            default_value="right_",
             description="tf_prefix of the joint names, useful for "
             "multi-robot setup. If changed, also joint names in the controllers' configuration "
             "have to be updated.",
@@ -719,7 +719,7 @@ def generate_launch_description():
     declared_arguments.append(
         DeclareLaunchArgument(
             "tf_prefix_2",
-            default_value="right_",
+            default_value="left_",
             description="tf_prefix of the joint names, useful for "
             "multi-robot setup. If changed, also joint names in the controllers' configuration "
             "have to be updated.",
