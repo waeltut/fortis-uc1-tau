@@ -54,10 +54,24 @@ ament_target_dependencies(table_node
   tf2_geometry_msgs
 )
 
+add_executable(
+  dual_arm_pose_commander
+  src/dual_arm_pose_commander.cpp
+)
+
+ament_target_dependencies(
+  dual_arm_pose_commander
+  rclcpp
+  geometry_msgs
+  moveit_ros_planning_interface
+  moveit_msgs
+)
+
 install(TARGETS  
   moveit_interface_node
   move_program
   table_node
+  dual_arm_pose_commander
   DESTINATION lib/${PROJECT_NAME}
 )
 

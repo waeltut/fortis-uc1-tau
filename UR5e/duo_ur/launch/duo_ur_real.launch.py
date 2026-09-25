@@ -531,7 +531,7 @@ def launch_setup(context, *args, **kwargs):
         .to_moveit_configs()
     )
 
-    use_sim_time={"use_sim_time": True}
+    use_sim_time={"use_sim_time": False}
     config_dict = moveit_config.to_dict()
     config_dict.update(use_sim_time)
     move_group_node = Node(
@@ -558,11 +558,11 @@ def launch_setup(context, *args, **kwargs):
         ],
     )
 
-    table_node = Node(
-        package="moveit_utils_pkg",
-        executable="table_node",
-        output="screen",
-    )
+    #table_node = Node(
+    #    package="moveit_utils_pkg",
+    #    executable="table_node",
+    #    output="screen",
+    #)
 
     moveit_interface_node = Node(
         package="moveit_utils_pkg",
@@ -588,7 +588,7 @@ def launch_setup(context, *args, **kwargs):
     ] + controller_spawners + [
         move_group_node,
         rviz_node,
-        table_node,
+        #table_node,
         moveit_interface_node,
         # humanoid_hand_node
     ]
@@ -783,7 +783,7 @@ def generate_launch_description():
         )
     )
     declared_arguments.append(
-        DeclareLaunchArgument("launch_rviz", default_value="true", description="Launch RViz?")
+        DeclareLaunchArgument("launch_rviz", default_value="false", description="Launch RViz?")
     )
     declared_arguments.append(
         DeclareLaunchArgument(
