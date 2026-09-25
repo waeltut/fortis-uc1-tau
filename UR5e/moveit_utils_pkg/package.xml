@@ -3,7 +3,7 @@
 <package format="3">
   <name>moveit_utils_pkg</name>
   <version>0.0.0</version>
-  <description>TODO: Package description</description>
+  <description>Worker-thread MoveIt pose planning and execution for two UR arms</description>
   <maintainer email="user@todo.todo">user</maintainer>
   <license>TODO: License declaration</license>
 
@@ -11,7 +11,6 @@
 
   <depend>rclcpp</depend>
   <depend>moveit_ros_planning_interface</depend>
-  <depend>interfaces_pkg</depend>
   <depend>geometry_msgs</depend>
   <depend>moveit_msgs</depend>
 

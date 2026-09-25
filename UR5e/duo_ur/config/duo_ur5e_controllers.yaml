@@ -3,24 +3,14 @@ controller_manager:
 
     update_rate: 100 # Hz
 
-    # left_joint_state_broadcaster:
-    #   type: joint_state_broadcaster/JointStateBroadcaster
-
     joint_state_broadcaster:
       type: joint_state_broadcaster/JointStateBroadcaster
-
 
     left_io_and_status_controller:
       type: ur_controllers/GPIOController
 
     speed_scaling_state_broadcaster:
       type: ur_controllers/SpeedScalingStateBroadcaster
-
-    # left_speed_scaling_state_broadcaster:
-    #   type: ur_controllers/SpeedScalingStateBroadcaster
-
-    # force_torque_sensor_broadcaster:
-    #   type: ur_controllers/ForceTorqueStateBroadcaster
 
     left_force_torque_sensor_broadcaster:
       type: ur_controllers/ForceTorqueStateBroadcaster
@@ -40,14 +30,8 @@ controller_manager:
     left_cartesian_motion_controller:
       type: cartesian_motion_controller/CartesianMotionController
 
-    # right_joint_state_broadcaster:
-    #   type: joint_state_broadcaster/JointStateBroadcaster
-
     right_io_and_status_controller:
       type: ur_controllers/GPIOController
-
-    # right_speed_scaling_state_broadcaster:
-    #   type: ur_controllers/SpeedScalingStateBroadcaster
 
     right_force_torque_sensor_broadcaster:
       type: ur_controllers/ForceTorqueStateBroadcaster
@@ -67,14 +51,11 @@ controller_manager:
     right_cartesian_motion_controller:
       type: cartesian_motion_controller/CartesianMotionController
 
-
     left_motion_control_handle:
       type: cartesian_controller_handles/MotionControlHandle
 
     right_motion_control_handle:
       type: cartesian_controller_handles/MotionControlHandle
-
-
 
 joint_state_broadcaster:
     ros__parameters:
@@ -97,19 +78,9 @@ speed_scaling_state_broadcaster:
   ros__parameters:
     state_publish_rate: 100.0
 
-# left_speed_scaling_state_broadcaster:
-#   ros__parameters:
-#     state_publish_rate: 100.0
-
-# right_speed_scaling_state_broadcaster:
-#   ros__parameters:
-#     state_publish_rate: 100.0
-
-
 left_cartesian_motion_controller:
   ros__parameters:
 
-    # See the cartesian_compliance_controller
     end_effector_link: "left_tcp"
     robot_base_link: "left_base_link"
     joints:
@@ -120,10 +91,8 @@ left_cartesian_motion_controller:
       - left_wrist_2_joint
       - left_wrist_3_joint
 
-    # See the cartesian_compliance_controller
     command_interfaces:
       - position
-        #- velocity
 
     solver:
         error_scale: 1.0
@@ -141,7 +110,6 @@ left_cartesian_motion_controller:
 right_cartesian_motion_controller:
   ros__parameters:
 
-    # See the cartesian_compliance_controller
     end_effector_link: "right_tcp"
     robot_base_link: "right_base_link"
     joints:
@@ -152,10 +120,8 @@ right_cartesian_motion_controller:
       - right_wrist_2_joint
       - right_wrist_3_joint
 
-    # See the cartesian_compliance_controller
     command_interfaces:
       - position
-        #- velocity
 
     solver:
         error_scale: 1.0
@@ -169,7 +135,6 @@ right_cartesian_motion_controller:
         rot_x: {p: 0.5}
         rot_y: {p: 0.5}
         rot_z: {p: 0.5}
-
 
 left_force_torque_sensor_broadcaster:
   ros__parameters:
@@ -196,7 +161,6 @@ right_force_torque_sensor_broadcaster:
       - torque.z
     frame_id: right_tool0
     topic_name: right_ft_data
-
 
 left_joint_trajectory_controller:
   ros__parameters:
@@ -251,8 +215,6 @@ right_joint_trajectory_controller:
       right_wrist_1_joint: { trajectory: 0.2, goal: 0.1 }
       right_wrist_2_joint: { trajectory: 0.2, goal: 0.1 }
       right_wrist_3_joint: { trajectory: 0.2, goal: 0.1 }
-
-
 
 left_scaled_joint_trajectory_controller:
   ros__parameters:
@@ -374,4 +336,4 @@ right_motion_control_handle:
       - right_elbow_joint
       - right_wrist_1_joint
       - right_wrist_2_joint
-      - right_wrist_3_joint      
+      - right_wrist_3_joint

@@ -143,17 +143,6 @@
         <joint name="left_wrist_3_joint" value="-2.3404"/>
     </group_state>
     <!--VIRTUAL JOINT: Purpose: this element defines a virtual joint between a robot link and an external frame of reference (considered fixed with respect to the robot)-->
-    <virtual_joint name="left_base_joint" type="fixed" parent_frame="left_plate" child_link="left_base_link"/>
-    <virtual_joint name="left_side_to_plate" type="fixed" parent_frame="left_side" child_link="left_plate"/>
-    <virtual_joint name="left_tool0_to_camera_base" type="fixed" parent_frame="left_tool0" child_link="left_camera_base"/>
-    <virtual_joint name="left_camera_base_to_sensor_base" type="fixed" parent_frame="left_camera_base" child_link="left_sensor_base"/>
-    <virtual_joint name="left_pruner_base_to_tcp" type="fixed" parent_frame="left_pruner_base" child_link="left_tcp"/>
-    <virtual_joint name="right_base_joint" type="fixed" parent_frame="right_plate" child_link="right_base_link"/>
-    <virtual_joint name="right_side_to_plate" type="fixed" parent_frame="right_side" child_link="right_plate"/>
-    <virtual_joint name="right_tool0_to_camera_base" type="fixed" parent_frame="right_tool0" child_link="right_camera_base"/>
-    <virtual_joint name="right_camera_base_to_sensor_base" type="fixed" parent_frame="right_camera_base" child_link="right_sensor_base"/>
-    <virtual_joint name="right_sensor_base_to_pruner_base" type="fixed" parent_frame="right_sensor_base" child_link="right_pruner_base"/>
-    <virtual_joint name="right_pruner_base_to_tcp" type="fixed" parent_frame="right_pruner_base" child_link="right_tcp"/>
     <!--DISABLE COLLISIONS: By default it is assumed that any link of the robot could potentially come into collision with any other link in the robot. This tag disables collision checking between a specified pair of links. -->
     <disable_collisions link1="hip" link2="left_base_link_inertia" reason="Never"/>
     <disable_collisions link1="hip" link2="left_plate" reason="Never"/>
@@ -329,7 +318,6 @@
     <disable_collisions link1="right_base_link_inertia" link2="right_shoulder_link" reason="Adjacent"/>
     <disable_collisions link1="right_base_link_inertia" link2="shoulder" reason="Never"/>
     <disable_collisions link1="right_base_link_inertia" link2="torso" reason="Never"/>
-    <disable_collisions link1="right_camera_base" link2="right_pruner_base" reason="Never"/>
     <disable_collisions link1="right_camera_base" link2="right_sensor_base" reason="Adjacent"/>
     <disable_collisions link1="right_camera_base" link2="right_wrist_1_link" reason="Never"/>
     <disable_collisions link1="right_camera_base" link2="right_wrist_2_link" reason="Never"/>
@@ -340,10 +328,6 @@
     <disable_collisions link1="right_plate" link2="right_shoulder_link" reason="Never"/>
     <disable_collisions link1="right_plate" link2="shoulder" reason="Never"/>
     <disable_collisions link1="right_plate" link2="torso" reason="Adjacent"/>
-    <disable_collisions link1="right_pruner_base" link2="right_sensor_base" reason="Adjacent"/>
-    <disable_collisions link1="right_pruner_base" link2="right_wrist_1_link" reason="Never"/>
-    <disable_collisions link1="right_pruner_base" link2="right_wrist_2_link" reason="Never"/>
-    <disable_collisions link1="right_pruner_base" link2="right_wrist_3_link" reason="Never"/>
     <disable_collisions link1="right_sensor_base" link2="right_wrist_1_link" reason="Never"/>
     <disable_collisions link1="right_sensor_base" link2="right_wrist_2_link" reason="Never"/>
     <disable_collisions link1="right_sensor_base" link2="right_wrist_3_link" reason="Never"/>

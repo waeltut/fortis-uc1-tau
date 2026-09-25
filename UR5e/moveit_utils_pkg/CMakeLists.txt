@@ -5,74 +5,27 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
-# find dependencies
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(geometry_msgs REQUIRED)
 find_package(moveit_ros_planning_interface REQUIRED)
-find_package(interfaces_pkg REQUIRED)
-# uncomment the following section in order to fill in
-# further dependencies manually.
-# find_package(<dependency> REQUIRED)
+find_package(moveit_msgs REQUIRED)
+find_package(Threads REQUIRED)
+
+add_executable(dual_arm_pose_commander src/dual_arm_pose_commander.cpp)
+target_compile_features(dual_arm_pose_commander PUBLIC cxx_std_17)
+ament_target_dependencies(dual_arm_pose_commander
+  rclcpp geometry_msgs moveit_ros_planning_interface moveit_msgs)
+target_link_libraries(dual_arm_pose_commander Threads::Threads)
+
+install(TARGETS dual_arm_pose_commander DESTINATION lib/${PROJECT_NAME})
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
-  # the following line skips the linter which checks for copyrights
-  # comment the line when a copyright and license is added to all source files
+  # Copyright/license metadata is inherited and still needs an owner decision.
   set(ament_cmake_copyright_FOUND TRUE)
-  # the following line skips cpplint (only works in a git repo)
-  # comment the line when this package is in a git repo and when
-  # a copyright and license is added to all source files
   set(ament_cmake_cpplint_FOUND TRUE)
   ament_lint_auto_find_test_dependencies()
 endif()
-
-add_executable(moveit_interface_node src/moveit_interface_node.cpp)
-target_include_directories(moveit_interface_node PUBLIC include)
-ament_target_dependencies(moveit_interface_node 
-  rclcpp
-  rclcpp_action 
-  interfaces_pkg
-  moveit_ros_planning_interface
-)
-
-add_executable(move_program src/move_program.cpp)
-target_include_directories(move_program PUBLIC include)
-ament_target_dependencies(move_program 
-  rclcpp
-  moveit_ros_planning_interface
-)
-
-add_executable(table_node src/table_node.cpp)
-target_include_directories(table_node PUBLIC include)
-ament_target_dependencies(table_node
-  rclcpp
-  moveit_ros_planning_interface
-  geometry_msgs
-  shape_msgs
-  moveit_msgs
-  tf2_ros
-  tf2_geometry_msgs
-)
-
-add_executable(
-  dual_arm_pose_commander
-  src/dual_arm_pose_commander.cpp
-)
-
-ament_target_dependencies(
-  dual_arm_pose_commander
-  rclcpp
-  geometry_msgs
-  moveit_ros_planning_interface
-  moveit_msgs
-)
-
-install(TARGETS  
-  moveit_interface_node
-  move_program
-  table_node
-  dual_arm_pose_commander
-  DESTINATION lib/${PROJECT_NAME}
-)
 
 ament_package()

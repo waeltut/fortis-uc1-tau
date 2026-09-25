@@ -1,4 +1,4 @@
-#include <chrono>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -79,14 +79,6 @@ public:
     right_plan_pub_ =
       create_publisher<moveit_msgs::msg::RobotTrajectory>(
         "/right_arm/planned_trajectory", 10);
-    
-    goal_callback_group_ =
-      create_callback_group(
-        rclcpp::CallbackGroupType::Reentrant);
-
-    rclcpp::SubscriptionOptions sub_options;
-    sub_options.callback_group = goal_callback_group_;
-
 
     left_goal_sub_ =
       create_subscription<geometry_msgs::msg::PoseStamped>(
@@ -268,12 +260,7 @@ private:
       "  EE link: %s",
       ee_link.c_str());
 
-    /*
-     * Very important:
-     *
-     * Explicitly start from the actual current robot configuration.
-     * This is the behaviour we want for the real UR arms.
-     */
+    // Require a current robot state before solving IK.
 
     auto current_state = move_group.getCurrentState(2.0);
 
@@ -284,7 +271,6 @@ private:
         arm_name.c_str());
       return;
     }
-
 
     move_group.setStartStateToCurrentState();
     move_group.clearPoseTargets();
@@ -411,20 +397,14 @@ private:
   rclcpp::Publisher<
     moveit_msgs::msg::RobotTrajectory>::SharedPtr
     right_plan_pub_;
-  
-  rclcpp::CallbackGroup::SharedPtr goal_callback_group_;
 
   std::mutex left_mutex_;
   std::mutex right_mutex_;
 };
 
-
 int main(int argc, char ** argv)
 {
   rclcpp::init(argc, argv);
-
-  rclcpp::NodeOptions node_options;
-  node_options.automatically_declare_parameters_from_overrides(true);
 
   auto node =
     std::make_shared<DualArmPoseCommander>();

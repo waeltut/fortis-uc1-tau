@@ -8,18 +8,3 @@ moveit_setup_assistant_config:
     author_name: kido
     author_email: hoang.m.pham@tuni.fi
     generated_timestamp: 1759745274
-  control_xacro:
-    command:
-      - position
-    state:
-      - position
-      - velocity
-  modified_urdf:
-    xacros:
-      - control_xacro
-  control_xacro:
-    command:
-      - position
-    state:
-      - position
-      - velocity

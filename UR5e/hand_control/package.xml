@@ -3,11 +3,12 @@
 <package format="3">
   <name>hand_control</name>
   <version>0.0.0</version>
-  <description>TODO: Package description</description>
+  <description>Normalized finger-position control for Revo1 hands over Modbus</description>
   <maintainer email="hugo@todo.todo">hugo</maintainer>
   <license>TODO: License declaration</license>
 
   <depend>rclpy</depend>
+  <depend>std_msgs</depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>
