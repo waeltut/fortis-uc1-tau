@@ -87,8 +87,6 @@
    <xacro:property name="sensor_base_length" value="0.035"/>
    <xacro:property name="sensor_base_origin" value="0 0 0.03"/>
 
-   <link name="world" />
-
   <link name="mur">
     <visual>
       <geometry>
@@ -105,11 +103,6 @@
       </geometry>
     </collision>
   </link>
-  <joint name="world_to_mur" type="fixed">
-    <parent link="world"/>
-    <child link="mur"/>
-    <origin xyz="${mur_origin}"/>
-  </joint>
 
   <link name="hip">
     <visual>

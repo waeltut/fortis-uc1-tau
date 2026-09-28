@@ -18,7 +18,7 @@ class TcpPosePublisher(Node):
         super().__init__('dual_arm_pose_publisher')
 
         # Common reference frame.
-        self.declare_parameter('reference_frame', 'world')
+        self.declare_parameter('reference_frame', 'mur')
 
         # Individual overrides.
         # Leave empty to use reference_frame.

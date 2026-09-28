@@ -7,12 +7,12 @@ $ ros2 launch dual_arm_driver dual_arm_driver.launch.py
 **Move arms to default positions:**
 
 ros2 topic pub --once /left_arm/goal_pose geometry_msgs/msg/PoseStamped "{
-  header: {frame_id: 'world'},
+  header: {frame_id: 'mur'},
   pose: {
     position: {
       x: 0.7,
       y: 0.25,
-      z: 1.3
+      z: 1.0
     },
     orientation: {
       x: 0,
@@ -25,12 +25,12 @@ ros2 topic pub --once /left_arm/goal_pose geometry_msgs/msg/PoseStamped "{
 
 
 ros2 topic pub --once /right_arm/goal_pose geometry_msgs/msg/PoseStamped "{
-  header: {frame_id: 'world'},
+  header: {frame_id: 'mur'},
   pose: {
     position: {
       x: 0.7,
       y: -0.25,
-      z: 1.3
+      z: 1.0
     },
     orientation: {
       x: -0.5,
