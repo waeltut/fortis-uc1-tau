@@ -28,7 +28,7 @@ def generate_launch_description():
         [
             DeclareLaunchArgument(
                 "reference_frame",
-                default_value="chest",
+                default_value="world", # In TF tree world is basically the coordinates of MiR. Maybe off by few cm
                 description="Default reference frame for TCP poses and goals",
             ),
             DeclareLaunchArgument(
