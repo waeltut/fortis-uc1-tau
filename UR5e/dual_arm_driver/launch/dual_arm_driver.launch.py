@@ -5,6 +5,11 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from moveit_configs_utils import MoveItConfigsBuilder
 
+from launch.actions import IncludeLaunchDescription
+from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import PathJoinSubstitution
+from launch_ros.substitutions import FindPackageShare
+
 
 def generate_launch_description():
 
@@ -33,7 +38,7 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "execute",
-                default_value="false",
+                default_value="true",
                 description="If true, MoveIt executes planned trajectories",
             ),
             DeclareLaunchArgument(
@@ -83,6 +88,33 @@ def generate_launch_description():
                         "planning_attempts": 5,
                     },
                 ],
+            ),
+            IncludeLaunchDescription(
+                PythonLaunchDescriptionSource(
+                    PathJoinSubstitution(
+                        [
+                            FindPackageShare("duo_ur"),
+                            "launch",
+                            "duo_ur_real.launch.py",
+                        ]
+                    )
+                )
+            ),
+
+            Node(
+                package="hand_control",
+                executable="hand_control",
+                name="left_hand_control",
+                output="screen",
+                parameters=[{"hand": "L"}],
+            ),
+
+            Node(
+                package="hand_control",
+                executable="hand_control",
+                name="right_hand_control",
+                output="screen",
+                parameters=[{"hand": "R"}],
             ),
         ]
     )
