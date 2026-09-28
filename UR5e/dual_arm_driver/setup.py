@@ -22,6 +22,7 @@ setup(
     entry_points={
         "console_scripts": [
             "tcp_pose_publisher = dual_arm_driver.tcp_pose_publisher:main",
+            "workspace_viewer = dual_arm_driver.workspace_viewer:main",
         ],
     },
 )
