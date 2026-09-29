@@ -4,6 +4,125 @@ ROS 2 Humble / MoveIt. Separate from the earlier `mur_workspace` package;
 this is an orientation-aware reachable-pose cache, **not** an all-orientation
 dexterous volume. It never sends a motion command.
 
+## Verified region growth (v0.3)
+
+Existing caches and configurations remain compatible. The new defaults apply
+when the following parameters are absent from your current YAML:
+
+```yaml
+refine_area: true
+refinement_padding: 0.35
+refinement_max_verified_per_arm: 2000
+```
+
+After a cached seed passes exact IK and self-collision checking, the query tests
+its four adjacent floor cells (5 cm away at default resolution) at the SAME
+heading. Each neighbour uses the successful joint solution as its IK seed.
+Only successful neighbours continue the expansion. Holes are not painted in
+without IK. Up to two attempts per cell allow a later seed to retry a failure;
+a failure is still not proof of unreachability. Untested cells remain unknown.
+
+The loop alternates between initial cached seeds and expanding frontiers, and
+between arms. A successful left/right cell also requests an individual check
+for the other arm at the same position and heading, using that OTHER arm's
+nearest cached seed at the same heading. This improves opportunities to find
+an intersection but does not guarantee one or establish simultaneous-arm use.
+
+Expansion stays within each arm's initial candidate XY bounding box plus
+`refinement_padding` in metres. It does not add new heading layers. It is
+limited by the existing total query budget and the new verified-area cell cap.
+Larger budgets allow more checks, not a promise of complete coverage. A robot
+with a genuinely narrow feasible region will still have a narrow result.
+
+`max_verified_per_arm` in the request/config now limits the **service response
+pose/solution shortlist only** when refinement is enabled. All found verified
+cells (up to the refinement cap) are published in the area grids and verified
+PoseArray topics. The response message reports the full area count before
+trimming the returned arrays. Initial candidate arrays still describe the
+cache seeds; the area grids include successful expansion cells as state 2.
+
+Keep using your normal `/find_base_candidates` call and
+`/reachability/candidate_markers`. Bright filled areas now grow through verified
+neighbours. Logs include `Refinement: checks L/R=..., warm-seed successes=...`.
+No cache regeneration is required. Preserve your existing config when unpacking,
+then touch source files, rebuild and restart as below. A geometry-only test
+checks neighbour steps, preserved heading, bounded expansion and a synthetic
+hole. The full ROS/IK runtime still needs validation on the robot.
+
+## Area publication update (v0.2.1)
+
+The node now retains and republishes area grids every two seconds, with their
+original query timestamps. Each completed query logs per-area `valid`, grid
+dimensions and candidate/verified counts. This improves late-subscriber delivery
+and diagnoses stale clearing messages; the reported delivery issue could not
+be reproduced in the authoring environment. No cache or interface change.
+
+## Upgrade to area grids (v0.2)
+
+The existing cache is compatible: **do not regenerate it for this update**.
+Keep your current `config/reachability.yaml` (including the query budget you
+changed). From a downloaded archive, overwrite the package source while
+excluding configuration, for example:
+
+```bash
+unzip -o ~/Downloads/mur_reachability.zip -d ~/ros2_ws/src/MUR -x 'mur_reachability/config/*'
+cd ~/ros2_ws
+find src/MUR/mur_reachability -type f -exec touch {} +
+colcon build --symlink-install --packages-select mur_reachability --cmake-force-configure --cmake-args -DCMAKE_BUILD_TYPE=Release
+source install/setup.bash
+```
+
+Adjust the archive path if it is elsewhere. The `touch` ensures modified source
+is rebuilt even though ZIP timestamps were deliberately fixed to avoid clock
+skew. Stop old reachability nodes before restarting the launch. No Python script
+permissions are involved. Repeat your normal `/find_base_candidates` call.
+
+The existing `/reachability/candidate_markers` topic now shows **filled regions**
+made from adjacent 5 cm cells, with boundary lines rather than separate cubes.
+It preserves holes and disconnected regions; it does not invent reachability
+between isolated cells. Blue is left, orange right, green intersection. Pale
+regions represent candidates; brighter regions represent verified cell centres.
+`*_outline` namespaces hold their outlines. Toggle namespaces to inspect layers.
+The visual is a 2D projection over headings, not a guarantee for every heading
+or every continuous point in a square.
+
+New machine-readable topics (`mur_reachability/msg/LayeredArea`):
+
+| Topic | Content |
+|---|---|
+| `/reachability/left_area` | Left `(x,y,heading)` grid |
+| `/reachability/right_area` | Right `(x,y,heading)` grid |
+| `/reachability/intersection_area` | Intersection at exactly the same cell AND heading |
+| `/reachability/intersection_candidates` | PoseArray of shared candidate positions/headings |
+| `/reachability/intersection_verified` | PoseArray where both independent arm checks passed |
+
+All three grids have a common origin, resolution, dimensions and heading list.
+The flattened cell index is `x + width*(y + height*heading_index)`.
+
+- **0**: unknown/not returned; never interpret as proven unreachable.
+- **1**: approximate candidate.
+- **2**: exact endpoint IK + self-collision passed at the cell centre/heading.
+
+Intersection state 2 requires state 2 in BOTH arm layers at the same heading.
+State 1 requires a candidate or verified entry in both layers. Merely overlapping
+2D projections with different headings is insufficient. The header identifies
+the fixed frame and query snapshot; `target`, `cache_id`, and truncation flags
+are included. `base_z` gives the tested base-origin height. `valid=false` clears
+the previous result while a query/reload is underway or after failure.
+
+With refinement disabled, the old verified-pose cap also limits the grid. With
+refinement enabled, see v0.3 above for the separate area cap. A small
+verified intersection can simply mean the two shortlists verified different
+cells; it is not proof that other shared placements are impossible. Pale area
+cells remain candidates even after unsuccessful finite IK attempts. Even with local refinement, there is no exhaustive verification guarantee for the whole area.
+
+This version intersects the two arms' results for the SAME submitted target.
+It does not combine results across separate requests automatically. The layered
+representation supports that later, provided frame, grid alignment, target
+history and robot assumptions are handled explicitly. Neither this intersection
+nor overlap means both arms can occupy the goal simultaneously: the checks are
+individual, with the other arm parked.
+
 ## Quick start
 
 Extract so there is exactly one package folder:
@@ -87,7 +206,7 @@ configuration to your map frame).
 | Topic | Meaning |
 |---|---|
 | `/reachability/cache_markers` | Blue/orange 3D cubes showing spatial occupancy of left/right cached TCP samples, attached to `mur` |
-| `/reachability/candidate_markers` | Pale 5 cm floor tiles = approximate candidate area; bright tiles = at least one verified heading; yellow arrow = target TCP pose |
+| `/reachability/candidate_markers` | Filled blue/orange/green areas with outlines = left/right/intersection; pale = candidates, bright = verified; yellow arrow = TCP goal |
 | `/reachability/left_candidates` | PoseArray of approximate left base poses, including heading |
 | `/reachability/right_candidates` | PoseArray of approximate right base poses, including heading |
 | `/reachability/left_verified` | Exact endpoint-verified left base poses; display as arrows |
@@ -251,7 +370,7 @@ ros2 launch mur_reachability reachability.launch.py config:=/absolute/path/reach
 
 ## Validation included
 
-The independent C++ core test compiles without ROS and exercises known base
+The independent area test checks same-heading intersection, status propagation, common dense indexing, negative cells, holes and disconnected outlines. The core test compiles without ROS and exercises known base
 translations/headings, tilted mounting frames, quaternion sign equivalence,
 height rejection, deadline truncation, cache round-trip and corruption checks.
 The synthetic benchmark used 300000 samples and 24 headings and took about

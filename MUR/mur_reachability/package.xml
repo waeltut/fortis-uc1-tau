@@ -1,10 +1,10 @@
 <?xml version="1.0"?>
 <package format="3">
-  <name>mur_reachability</name><version>0.1.0</version>
+  <name>mur_reachability</name><version>0.3.0</version>
   <description>Robot-derived reachability cache and bounded-time mobile base candidates.</description>
   <maintainer email="maintainer@example.com">MUR maintainer</maintainer><license>Apache-2.0</license>
   <buildtool_depend>ament_cmake</buildtool_depend><buildtool_depend>rosidl_default_generators</buildtool_depend>
-  <depend>rclcpp</depend><depend>std_srvs</depend><depend>geometry_msgs</depend><depend>sensor_msgs</depend>
+  <depend>rclcpp</depend><depend>std_msgs</depend><depend>std_srvs</depend><depend>geometry_msgs</depend><depend>sensor_msgs</depend>
   <depend>visualization_msgs</depend><depend>moveit_msgs</depend><depend>moveit_core</depend>
   <depend>moveit_ros_planning</depend><depend>tf2</depend><depend>tf2_ros</depend><depend>yaml-cpp</depend>
   <exec_depend>rosidl_default_runtime</exec_depend><exec_depend>launch</exec_depend>

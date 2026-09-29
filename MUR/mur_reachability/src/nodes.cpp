@@ -16,6 +16,10 @@
 #include <mur_reachability/srv/find_base_candidates.hpp>
 #include <yaml-cpp/yaml.h>
 #include "mur_reachability/core.hpp"
+#include "mur_reachability/area.hpp"
+#include "mur_reachability/refine.hpp"
+#include <deque>
+#include <mur_reachability/msg/layered_area.hpp>
 #include <Eigen/Geometry>
 #include <atomic>
 #include <cstdlib>
@@ -34,6 +38,7 @@ using Trigger=std_srvs::srv::Trigger;
 using Find=mur_reachability::srv::FindBaseCandidates;
 using Marker=visualization_msgs::msg::Marker;
 using Markers=visualization_msgs::msg::MarkerArray;
+using Area=mur_reachability::msg::LayeredArea;
 static const std::array<std::string,2> sides{"left","right"};
 
 mr::Transform plain(const Eigen::Isometry3d& t) {
@@ -79,6 +84,11 @@ public:
     ik_timeout_=param<double>("ik_timeout",.008);
     pos_tol_=param<double>("verification_position_tolerance",.001);rot_tol_=param<double>("verification_orientation_tolerance",.01);
     floor_=param<double>("floor_z",0.0);
+    refine_=param<bool>("refine_area",true);
+    refine_radius_=param<double>("refinement_padding",.35);
+    refine_limit_=param<int>("refinement_max_verified_per_arm",2000);
+    if(!std::isfinite(refine_radius_)||refine_radius_<0||refine_radius_>2||refine_limit_<1||refine_limit_>10000)
+      throw std::runtime_error("Invalid refinement parameters");
     if(samples_<1||samples_>5000000||yaw_bins<1||yaw_bins>360||max_candidates<1||max_candidates>100000||seed_count<1||seed_count>20||max_verified_<1||max_verified_>1000)
       throw std::runtime_error("Invalid count parameter");
     for(double v:{margin_,joint_margin_,voxel_,opt_.resolution,opt_.height_tolerance,opt_.angle_tolerance,budget_,ik_timeout_,pos_tol_,rot_tol_,floor_})
@@ -143,6 +153,10 @@ public:
         candidate_pubs_[a]=create_publisher<geometry_msgs::msg::PoseArray>("/reachability/"+sides[a]+"_candidates",qos);
         verified_pubs_[a]=create_publisher<geometry_msgs::msg::PoseArray>("/reachability/"+sides[a]+"_verified",qos);
       }
+      const std::array<std::string,3> area_names{"left","right","intersection"};
+      for(unsigned a=0;a<3;++a)area_pubs_[a]=create_publisher<Area>("/reachability/"+area_names[a]+"_area",qos);
+      intersection_candidates_pub_=create_publisher<geometry_msgs::msg::PoseArray>("/reachability/intersection_candidates",qos);
+      intersection_verified_pub_=create_publisher<geometry_msgs::msg::PoseArray>("/reachability/intersection_verified",qos);
     }
     timer_=create_wall_timer(2s,[this]{republish();});
     try{reload();if(builder_)cache_markers();}catch(const std::exception& e){RCLCPP_WARN(get_logger(),"Cache not loaded: %s",e.what());}
@@ -241,15 +255,18 @@ private:
   bool exact(unsigned arm,const mr::Candidate& c,const Eigen::Isometry3d& goal,
              const Eigen::Isometry3d& base_from_reference,double base_z,
              planning_scene::PlanningScene& scene,const moveit::core::RobotState& parked,
-             Clock::time_point deadline,sensor_msgs::msg::JointState& solution) {
+             Clock::time_point deadline,sensor_msgs::msg::JointState& solution,const std::vector<double>& warm={}) {
     const Eigen::Isometry3d world_base=planar(c,base_z);
     const Eigen::Isometry3d relative=(world_base*base_from_reference).inverse()*goal;
     if(arm==0?relative.translation().y()<-margin_:relative.translation().y()>margin_)return false;
     const Eigen::Isometry3d target=parked.getGlobalLinkTransform(frame_)*relative;
     auto* group=model_->getJointModelGroup(groups_[arm]);
-    for(size_t seed:c.seeds) {
+    std::vector<std::vector<double>> seeds;
+    if(!warm.empty())seeds.push_back(warm);
+    for(size_t i:c.seeds)seeds.push_back(cache_.samples[arm][i].joints);
+    for(const auto& seed:seeds) {
       double remaining=std::chrono::duration<double>(deadline-Clock::now()).count();if(remaining<=0)return false;
-      moveit::core::RobotState state=parked;state.setJointGroupPositions(group,cache_.samples[arm][seed].joints);
+      moveit::core::RobotState state=parked;state.setJointGroupPositions(group,seed);
       moveit::core::GroupStateValidityCallbackFn callback=[&](moveit::core::RobotState* s,const moveit::core::JointModelGroup* g,const double* q){
         s->setJointGroupPositions(g,q);s->update();
         const auto& actual=s->getGlobalLinkTransform(tips_[arm]);
@@ -298,26 +315,82 @@ private:
         candidates[a]->header.stamp=verified[a]->header.stamp=stamp;
         for(const auto& c:found[a].candidates)candidates[a]->poses.push_back(to_pose(planar(c,base_z)));
       }
-      std::array<size_t,2> next{};
+      struct Work {mr::Candidate candidate;std::vector<double> warm;};
+      std::array<std::deque<Work>,2> frontier;
+      std::array<std::map<mr::AreaKey,unsigned>,2> attempts;
+      std::array<std::set<mr::AreaKey>,2> solved,pending;
+      std::array<mr::RefineBounds,2> bounds;
+      auto key_of=[this](const mr::Candidate& c){return mr::area_key(c.x,c.y,c.yaw,opt_.resolution,opt_.yaw_bins);};
+      auto candidate_of=[this](const mr::AreaKey& k){mr::Candidate c;c.x=(std::get<0>(k)+.5)*opt_.resolution;c.y=(std::get<1>(k)+.5)*opt_.resolution;c.yaw=6.2831853071795864769*std::get<2>(k)/opt_.yaw_bins;return c;};
+      for(unsigned a=0;a<2;++a) {
+        bool first=true;
+        for(const auto& c:found[a].candidates) {
+          auto k=key_of(c);auto x=std::get<0>(k),y=std::get<1>(k);
+          if(first){bounds[a]={x,x,y,y};first=false;}
+          bounds[a].xmin=std::min(bounds[a].xmin,x);bounds[a].xmax=std::max(bounds[a].xmax,x);
+          bounds[a].ymin=std::min(bounds[a].ymin,y);bounds[a].ymax=std::max(bounds[a].ymax,y);
+        }
+        if(!first){auto pad=static_cast<long long>(std::ceil(refine_radius_/opt_.resolution));bounds[a].xmin-=pad;bounds[a].xmax+=pad;bounds[a].ymin-=pad;bounds[a].ymax+=pad;}
+      }
+      auto enqueue=[&](unsigned a,const mr::AreaKey& k,Work work){
+        if(bounds[a].contains(k)&&!solved[a].count(k)&&attempts[a][k]<2&&pending[a].insert(k).second)
+          frontier[a].push_back(std::move(work));
+      };
+      std::array<size_t,2> next{},turns{},checks{},grown{};
+      const size_t area_limit=refine_?static_cast<size_t>(refine_limit_):max_verified;
       while(Clock::now()<deadline) {
         bool progressed=false;
         for(unsigned a=0;a<2;++a) {
           if(Clock::now()>=deadline)break;
-          if(next[a]>=found[a].candidates.size()||verified[a]->poses.size()>=max_verified)continue;
-          progressed=true;const auto& c=found[a].candidates[next[a]++];sensor_msgs::msg::JointState joints;
-          if(exact(a,c,goal,mount,base_z,*scene,parked,deadline,joints)) {
-            verified[a]->poses.push_back(to_pose(planar(c,base_z)));solutions[a]->push_back(joints);
+          if(verified[a]->poses.size()>=area_limit)continue;
+          Work work;bool have=false;
+          // Every third turn starts another cached seed; other turns grow successful regions.
+          bool take_cache=frontier[a].empty()||turns[a]%3==0;
+          if(take_cache)while(next[a]<found[a].candidates.size()) {
+            auto c=found[a].candidates[next[a]++];auto k=key_of(c);
+            if(!solved[a].count(k)&&attempts[a][k]<2){work.candidate=c;have=true;break;}
+          }
+          if(!have)while(!frontier[a].empty()) {
+            work=std::move(frontier[a].front());frontier[a].pop_front();auto k=key_of(work.candidate);pending[a].erase(k);
+            if(!solved[a].count(k)&&attempts[a][k]<2){have=true;break;}
+          }
+          if(!have)while(next[a]<found[a].candidates.size()) {
+            auto c=found[a].candidates[next[a]++];auto k=key_of(c);
+            if(!solved[a].count(k)&&attempts[a][k]<2){work.candidate=c;have=true;break;}
+          }
+          if(!have)continue;
+          progressed=true;++turns[a];auto k=key_of(work.candidate);++attempts[a][k];++checks[a];
+          sensor_msgs::msg::JointState joints;
+          if(exact(a,work.candidate,goal,mount,base_z,*scene,parked,deadline,joints,work.warm)) {
+            solved[a].insert(k);
+            verified[a]->poses.push_back(to_pose(planar(work.candidate,base_z)));solutions[a]->push_back(joints);
+            if(!work.warm.empty())++grown[a];
+            if(refine_) {
+              for(const auto& neighbour:mr::neighbours(k))enqueue(a,neighbour,Work{candidate_of(neighbour),joints.position});
+              // Probe the same base cell/heading for the OTHER arm with that arm's own nearest cached seeds.
+              unsigned other=1-a;double best=std::numeric_limits<double>::infinity();const mr::Candidate* nearest=nullptr;
+              for(const auto& c:found[other].candidates)if(std::get<2>(key_of(c))==std::get<2>(k)) {
+                double d=(c.x-work.candidate.x)*(c.x-work.candidate.x)+(c.y-work.candidate.y)*(c.y-work.candidate.y);
+                if(d<best){best=d;nearest=&c;}
+              }
+              if(nearest){auto probe=work.candidate;probe.seeds=nearest->seeds;enqueue(other,k,Work{probe,{}});}
+            }
           }
         }
         if(!progressed)break;
       }
+      RCLCPP_INFO(get_logger(),"Refinement: checks L/R=%zu/%zu, warm-seed successes=%zu/%zu, full verified area=%zu/%zu",
+        checks[0],checks[1],grown[0],grown[1],verified[0]->poses.size(),verified[1]->poses.size());
       response.budget_exhausted=Clock::now()>=deadline;
       response.success=true;
       std::ostringstream msg;msg<<"Candidates L/R="<<response.left_candidates.poses.size()<<"/"<<response.right_candidates.poses.size()
         <<"; exact IK+self-collision verified="<<response.left_verified.poses.size()<<"/"<<response.right_verified.poses.size()
-        <<". Environment/navigation/path checks NOT performed. Results are a sampled, limited shortlist, not exhaustive.";
+        <<"; response pose limit per arm="<<max_verified
+        <<". Full refined grids are on area topics. Environment/navigation/path checks NOT performed; untested cells remain unknown.";
       response.message=msg.str();
-      publish_result(response,goal);
+      publish_result(response,goal,base_z);
+      // Area topics retain the full refined result; the service keeps a bounded pose/solution shortlist.
+      for(unsigned a=0;a<2;++a)if(verified[a]->poses.size()>max_verified){verified[a]->poses.resize(max_verified);solutions[a]->resize(max_verified);}
     } catch(const std::exception& e){response.success=false;response.message=e.what();RCLCPP_ERROR(get_logger(),"%s",e.what());}
     response.elapsed_seconds=std::chrono::duration<double>(Clock::now()-start).count();
     RCLCPP_INFO(get_logger(),"Query %.3f s: %s",response.elapsed_seconds,response.message.c_str());
@@ -337,35 +410,119 @@ private:
     }
     {std::lock_guard<std::mutex> guard(display_mutex_);display_=all;}marker_pub_->publish(all);
   }
-  void publish_result(const Find::Response& r,const Eigen::Isometry3d& goal) {
+  void publish_result(const Find::Response& r,const Eigen::Isometry3d& goal,double base_z) {
     Markers all;
-    std::array<const geometry_msgs::msg::PoseArray*,2> c{&r.left_candidates,&r.right_candidates},v{&r.left_verified,&r.right_verified};
+    const std::array<std::string,3> labels{"left","right","intersection"};
+    std::array<const geometry_msgs::msg::PoseArray*,2> candidates{&r.left_candidates,&r.right_candidates};
+    std::array<const geometry_msgs::msg::PoseArray*,2> verified{&r.left_verified,&r.right_verified};
+    std::array<mr::SparseArea,3> areas;
+    auto key=[this](const geometry_msgs::msg::Pose& p) {
+      const auto& q=p.orientation;
+      double yaw=std::atan2(2*(q.w*q.z+q.x*q.y),1-2*(q.y*q.y+q.z*q.z));
+      return mr::area_key(p.position.x,p.position.y,yaw,opt_.resolution,opt_.yaw_bins);
+    };
     for(unsigned a=0;a<2;++a) {
-      candidate_pubs_[a]->publish(*c[a]);verified_pubs_[a]->publish(*v[a]);
+      for(const auto& p:candidates[a]->poses)mr::insert_area(areas[a],key(p),1);
+      for(const auto& p:verified[a]->poses)mr::insert_area(areas[a],key(p),2);
+    }
+    // Intersect in (x,y,heading), BEFORE projecting down to the floor.
+    areas[2]=mr::intersect_areas(areas[0],areas[1]);
+    const auto bounds=mr::common_bounds(areas,opt_.yaw_bins);
+    const auto stamp=r.left_candidates.header.stamp;
+    std::array<Area,3> messages;
+    for(unsigned a=0;a<3;++a) {
+      auto& message=messages[a];message.header.frame_id=fixed_;message.header.stamp=stamp;
+      message.arm=labels[a];message.cache_id=r.cache_id;message.valid=true;
+      message.resolution=opt_.resolution;
+      message.origin.x=bounds.x*opt_.resolution;message.origin.y=bounds.y*opt_.resolution;message.origin.z=0;
+      message.width=bounds.width;message.height=bounds.height;message.base_z=base_z;
+      for(unsigned k=0;k<opt_.yaw_bins;++k)message.headings.push_back(6.2831853071795864769*k/opt_.yaw_bins);
+      message.cells=mr::dense_area(areas[a],bounds);
+      message.target.header=message.header;message.target.pose=to_pose(goal);
+      message.lookup_truncated=r.search_truncated;message.verification_budget_exhausted=r.budget_exhausted;
+      message.conditions="0 unknown, 1 candidate, 2 exact endpoint IK+self-collision at cell centre/heading. Partial sampled search; no environment/navigation/path check. Intersection is independent-arm feasibility, not simultaneous use.";
       for(unsigned status=0;status<2;++status) {
-        auto m=marker(fixed_,sides[a]+(status?"_verified":"_candidates"),Marker::CUBE_LIST);
-        m.scale.x=m.scale.y=opt_.resolution*.94;m.scale.z=.003;
-        m.color.r=a==0?.1f:1.f;m.color.g=.5;m.color.b=a==0?1.f:.05f;m.color.a=status?.95f:.18f;
-        std::set<std::pair<long long,long long>> cells;
-        const auto& array=status?*v[a]:*c[a];
-        for(const auto& pose:array.poses) {
-          auto key=std::make_pair(std::llround(pose.position.x/opt_.resolution-.5),std::llround(pose.position.y/opt_.resolution-.5));
-          if(cells.insert(key).second){auto p=pose.position;p.z=floor_+.006+.004*a+.012*status;m.points.push_back(p);}
+        const auto cells=mr::project_area(areas[a],status==1);
+        const double z=floor_+.006+.004*a+.020*status;
+        auto fill=marker(fixed_,labels[a]+(status?"_verified":"_candidates"),Marker::TRIANGLE_LIST);
+        fill.scale.x=fill.scale.y=fill.scale.z=1;
+        fill.color.r=a==0?.1f:a==1?1.f:.15f;
+        fill.color.g=a==2?1.f:.5f;
+        fill.color.b=a==0?1.f:a==1?.05f:.3f;
+        fill.color.a=status?.82f:.20f;
+        auto point=[this,z](long long x,long long y) {
+          geometry_msgs::msg::Point p;p.x=x*opt_.resolution;p.y=y*opt_.resolution;p.z=z;return p;
+        };
+        for(const auto& entry:cells) {
+          const auto x=entry.first.first,y=entry.first.second;
+          auto p0=point(x,y),p1=point(x+1,y),p2=point(x+1,y+1),p3=point(x,y+1);
+          fill.points.insert(fill.points.end(),{p0,p1,p2,p0,p2,p3});
         }
-        all.markers.push_back(m);
+        all.markers.push_back(fill);
+        auto outline=marker(fixed_,fill.ns+"_outline",Marker::LINE_LIST);
+        outline.scale.x=std::min(.008,opt_.resolution*.12);outline.color=fill.color;
+        outline.color.a=status?1.f:.65f;
+        for(const auto& edge:mr::boundary(cells)) {
+          auto p0=point(edge.from.first,edge.from.second),p1=point(edge.to.first,edge.to.second);
+          p0.z+=.001;p1.z+=.001;outline.points.push_back(p0);outline.points.push_back(p1);
+        }
+        all.markers.push_back(outline);
       }
     }
-    auto target=marker(fixed_,"target_tcp",Marker::ARROW);target.pose=to_pose(goal);target.scale.x=.15;target.scale.y=.025;target.scale.z=.025;
-    target.color.r=1;target.color.g=1;target.color.a=1;all.markers.push_back(target);
+    geometry_msgs::msg::PoseArray intersection_candidates,intersection_verified;
+    intersection_candidates.header=intersection_verified.header=messages[2].header;
+    for(const auto& entry:areas[2]) {
+      mr::Candidate c;c.x=(std::get<0>(entry.first)+.5)*opt_.resolution;
+      c.y=(std::get<1>(entry.first)+.5)*opt_.resolution;
+      c.yaw=6.2831853071795864769*std::get<2>(entry.first)/opt_.yaw_bins;
+      const auto pose=to_pose(planar(c,base_z));intersection_candidates.poses.push_back(pose);
+      if(entry.second==2)intersection_verified.poses.push_back(pose);
+    }
+    auto target=marker(fixed_,"target_tcp",Marker::ARROW);target.pose=to_pose(goal);
+    target.scale.x=.15;target.scale.y=.025;target.scale.z=.025;target.color.r=1;target.color.g=1;target.color.a=1;all.markers.push_back(target);
+    // Publish only after all areas were built successfully.
+    for(unsigned a=0;a<2;++a){candidate_pubs_[a]->publish(*candidates[a]);verified_pubs_[a]->publish(*verified[a]);}
+    {
+      std::lock_guard<std::mutex> guard(display_mutex_);
+      latest_areas_=messages;
+      have_areas_=true;
+      for(unsigned a=0;a<3;++a)area_pubs_[a]->publish(latest_areas_[a]);
+    }
+    for(unsigned a=0;a<3;++a) {
+      RCLCPP_INFO(get_logger(),"Area %s: valid=%s grid=%u x %u headings=%zu candidate_or_verified=%zu verified=%zu",
+        messages[a].arm.c_str(),messages[a].valid?"true":"false",messages[a].width,messages[a].height,
+        messages[a].headings.size(),areas[a].size(),
+        static_cast<size_t>(std::count_if(areas[a].begin(),areas[a].end(),[](const auto& entry){return entry.second==2;})));
+    }
+    intersection_candidates_pub_->publish(intersection_candidates);
+    intersection_verified_pub_->publish(intersection_verified);
     {std::lock_guard<std::mutex> guard(display_mutex_);display_=all;}marker_pub_->publish(all);
+    RCLCPP_INFO(get_logger(),"Area intersection: %zu candidate base poses, %zu verified (same cell AND heading)",
+      intersection_candidates.poses.size(),intersection_verified.poses.size());
   }
   void clear_candidates() {
     Markers empty;auto m=marker(fixed_,"",Marker::CUBE_LIST);m.action=Marker::DELETEALL;empty.markers.push_back(m);
     {std::lock_guard<std::mutex> guard(display_mutex_);display_=empty;}marker_pub_->publish(empty);
     for(unsigned a=0;a<2;++a)if(candidate_pubs_[a]){geometry_msgs::msg::PoseArray p;p.header.frame_id=fixed_;p.header.stamp=now();candidate_pubs_[a]->publish(p);verified_pubs_[a]->publish(p);}
+    const std::array<std::string,3> labels{"left","right","intersection"};
+    {
+      std::lock_guard<std::mutex> guard(display_mutex_);
+      for(unsigned a=0;a<3;++a)if(area_pubs_[a]){
+        Area area;area.header.frame_id=fixed_;area.header.stamp=now();area.arm=labels[a];area.valid=false;
+        latest_areas_[a]=area;area_pubs_[a]->publish(latest_areas_[a]);
+      }
+      have_areas_=!builder_;
+    }
+    if(intersection_candidates_pub_){geometry_msgs::msg::PoseArray p;p.header.frame_id=fixed_;p.header.stamp=now();intersection_candidates_pub_->publish(p);intersection_verified_pub_->publish(p);}
   }
-  void republish(){std::lock_guard<std::mutex> guard(display_mutex_);marker_pub_->publish(display_);}
-  bool builder_,ready_=false;
+  void republish(){
+    std::lock_guard<std::mutex> guard(display_mutex_);
+    marker_pub_->publish(display_);
+    // Retain the query timestamp: republishing does not make an old calculation fresh.
+    if(have_areas_)for(unsigned a=0;a<3;++a)if(area_pubs_[a])area_pubs_[a]->publish(latest_areas_[a]);
+  }
+  bool builder_,ready_=false,refine_=true;
+  double refine_radius_=0.35;int refine_limit_=2000;
   std::string source_,frame_,base_,fixed_,scene_name_,path_,fingerprint_,cache_id_,model_record_;
   std::array<std::string,2> groups_,tips_;
   double margin_,joint_margin_,voxel_,budget_,ik_timeout_,pos_tol_,rot_tol_,floor_;
@@ -379,6 +536,9 @@ private:
   std::unique_ptr<tf2_ros::Buffer> tf_;std::shared_ptr<tf2_ros::TransformListener> listener_;
   rclcpp::Publisher<Markers>::SharedPtr marker_pub_;
   std::array<rclcpp::Publisher<geometry_msgs::msg::PoseArray>::SharedPtr,2> candidate_pubs_,verified_pubs_;
+  std::array<rclcpp::Publisher<Area>::SharedPtr,3> area_pubs_;
+  std::array<Area,3> latest_areas_;bool have_areas_=false;
+  rclcpp::Publisher<geometry_msgs::msg::PoseArray>::SharedPtr intersection_candidates_pub_,intersection_verified_pub_;
   rclcpp::TimerBase::SharedPtr timer_;std::mutex display_mutex_;Markers display_;std::atomic<bool> cancel_{false};
 };
 int main(int argc,char** argv) {

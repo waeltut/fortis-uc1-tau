@@ -15,7 +15,7 @@
     # Offline attempts per arm, FK + self collision. Not a minimum accepted count.
     samples_per_arm: 300000
     random_seed: 42
-    display_voxel_size: 0.025
+    display_voxel_size: 0.05
     # Online lookup. These are candidate search tolerances, NOT final IK tolerances.
     grid_resolution: 0.05
     yaw_bins: 24
@@ -31,3 +31,7 @@
     verification_orientation_tolerance: 0.01
     # Visual tiles only. Candidate base z comes from the live base TF.
     floor_z: 0.0
+    # Grow verified regions using neighbouring IK solutions. Same total query budget.
+    refine_area: true
+    refinement_padding: 0.35
+    refinement_max_verified_per_arm: 2000
