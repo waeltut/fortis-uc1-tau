@@ -1,0 +1,22 @@
+# Same TCP target tested separately for each arm. Zero timestamp = latest TF.
+geometry_msgs/PoseStamped target
+# Zero selects configured defaults. This is a cooperative, not hard realtime, budget.
+float64 time_budget
+uint32 max_verified_per_arm
+---
+bool success
+string message
+string cache_id
+float64 elapsed_seconds
+bool budget_exhausted
+bool search_truncated
+# Approximate suggestions, NOT verified or collision-free navigation goals.
+geometry_msgs/PoseArray left_candidates
+geometry_msgs/PoseArray right_candidates
+# Exact endpoint IK + current snapshot self-collision checked.
+# Environment collisions, navigation and arm paths are NOT checked.
+geometry_msgs/PoseArray left_verified
+geometry_msgs/PoseArray right_verified
+# One joint state per verified pose, in matching array order.
+sensor_msgs/JointState[] left_solutions
+sensor_msgs/JointState[] right_solutions
