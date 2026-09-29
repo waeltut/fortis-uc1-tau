@@ -5,7 +5,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 ARG USERNAME=fortis_dev
 ARG UID=1000
 ARG GID=$UID
-ARG ROS_DOMAIN_ID=20
+ARG ROS_DOMAIN_ID=67
 
 # -------------------------
 # Base system dependencies
