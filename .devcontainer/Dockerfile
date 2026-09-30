@@ -97,6 +97,7 @@ WORKDIR /
 COPY requirements.txt /
 RUN pip install --index-url https://download.pytorch.org/whl/cu130 \
     torch torchvision torchaudio
+RUN python3 -m pip install --no-cache-dir --upgrade "packaging>=22.0"
 RUN pip install --no-cache-dir -r requirements.txt
 RUN python3 -m pip install --no-cache-dir roslibpy
 
