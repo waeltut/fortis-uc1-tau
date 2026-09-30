@@ -1,0 +1,9 @@
+# Development endpoint. The CSV toolkit component is independent.
+# Flat configuration read by bridge.launch.py (not a ROS parameter file).
+address: "0.0.0.0"
+port: 9091
+# Empty strings mean unrestricted access, NOT deny-all.
+# These legacy rosbridge glob settings are strings, not YAML lists.
+topics_glob: ""
+services_glob: ""
+params_glob: ""
