@@ -14,14 +14,15 @@ class FactoryDataService(Node):
         self.get_logger().info('Ready: get_factory_data -> ' + self.get_parameter('server_url').value)
 
     def handle_request(self, request, response):
-        del request
         response.success = False
         response.json_data = ''
         try:
             text, data = fetch_data(
                 self.get_parameter('server_url').value,
                 self.get_parameter('timeout_sec').value,
-                self.get_parameter('max_response_bytes').value)
+                self.get_parameter('max_response_bytes').value,
+                filters={key: getattr(request, key) for key in
+                         ('worker', 'day', 'month', 'year', 'station', 'shift', 'date')})
             # Partial or empty datasets remain valid responses; skipped files are explicit.
             response.success = True
             response.json_data = text

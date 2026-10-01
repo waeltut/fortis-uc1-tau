@@ -12,7 +12,7 @@ import os
 from pathlib import Path
 import re
 import tempfile
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, urlsplit
 
 LOG = logging.getLogger('factory_data')
 NAME = re.compile(r'(?P<date>[0-9]{4}-[0-9]{2}-[0-9]{2})_Station_(?P<station_id>[A-Za-z0-9-]+)_W(?P<worker_id>[A-Za-z0-9-]+)_(?P<shift>[AMN])\.csv')
@@ -27,6 +27,69 @@ def metadata(filename):
     date.fromisoformat(result['date'])  # Reject impossible dates, e.g. 2026-02-30.
     result['shift_name'] = SHIFTS[result['shift']]
     return result
+
+
+FILTER_KEYS = ('worker', 'day', 'month', 'year', 'station', 'shift', 'date')
+
+
+def parse_filters(query):
+    """Parse and validate public query parameters. Every supplied filter uses AND."""
+
+    if not query:
+        return {}
+
+    pairs = parse_qsl(
+        query,
+        keep_blank_values=True,
+        strict_parsing=True,
+        max_num_fields=20,
+    )
+    
+    filters = {}
+    for key, value in pairs:
+        if key not in FILTER_KEYS:
+            raise ValueError(f'unknown filter {key!r}; allowed: {", ".join(FILTER_KEYS)}')
+        if key in filters:
+            raise ValueError(f'duplicate filter {key!r}; use one value per filter')
+        if not value:
+            raise ValueError(f'filter {key!r} must not be empty; omit unused filters')
+        if key in ('day', 'month', 'year'):
+            maximum = {'day': 31, 'month': 12, 'year': 9999}[key]
+            if not re.fullmatch(r'[0-9]{1,4}', value) or not 1 <= int(value) <= maximum:
+                raise ValueError(f'{key} must be an integer from 1 to {maximum}')
+            value = int(value)
+        elif key in ('worker', 'station'):
+            if not re.fullmatch(r'[A-Za-z0-9-]+', value):
+                raise ValueError(f'{key} must contain only letters, digits or hyphens')
+        elif key == 'shift':
+            if value not in SHIFTS:
+                raise ValueError('shift must be A, M or N')
+        elif key == 'date':
+            if not re.fullmatch(r'[0-9]{4}-[0-9]{2}-[0-9]{2}', value):
+                raise ValueError('date must be YYYY-MM-DD')
+            date.fromisoformat(value)
+        filters[key] = value
+    if 'date' in filters:
+        exact = date.fromisoformat(filters['date'])
+        for key in ('year', 'month', 'day'):
+            if key in filters and filters[key] != getattr(exact, key):
+                raise ValueError(f'{key} conflicts with date')
+    if 'month' in filters and 'day' in filters:
+        # Use a leap year if year is unspecified: February 29 can match leap years.
+        date(filters.get('year', 2000), filters['month'], filters['day'])
+    return filters
+
+
+def matches_filters(info, filters):
+    file_date = date.fromisoformat(info['date'])
+    for key, value in filters.items():
+        if key in ('year', 'month', 'day'):
+            actual = getattr(file_date, key)
+        else:
+            actual = info[{'worker': 'worker_id', 'station': 'station_id'}.get(key, key)]
+        if actual != value:
+            return False
+    return True
 
 
 def read_csv(path, delimiter='auto', encoding='utf-8-sig'):
@@ -63,7 +126,9 @@ def read_csv(path, delimiter='auto', encoding='utf-8-sig'):
     return columns, rows
 
 
-def aggregate(data_dir, delimiter='auto', encoding='utf-8-sig'):
+def aggregate(data_dir, delimiter='auto', encoding='utf-8-sig', filters=None):
+    filters = {} if filters is None else filters
+    filtered_out_count = 0
     root = Path(data_dir).resolve()
     if not root.is_dir():
         raise OSError(f'data directory does not exist: {root}')
@@ -82,6 +147,9 @@ def aggregate(data_dir, delimiter='auto', encoding='utf-8-sig'):
             if path.is_symlink():
                 raise ValueError('symbolic-link CSV files are not supported')
             info = metadata(path.name)
+            if not matches_filters(info, filters):
+                filtered_out_count += 1
+                continue
             columns, rows = read_csv(path, delimiter, encoding)
             files.append({'filename': path.name, 'relative_path': relative, **info,
                           'columns': columns, 'row_count': len(rows), 'rows': rows})
@@ -91,7 +159,8 @@ def aggregate(data_dir, delimiter='auto', encoding='utf-8-sig'):
             errors.append({'relative_path': relative, 'message': message})
     result = {'schema_version': 1, 'generated_at': datetime.now(timezone.utc).isoformat(),
               'file_count': len(files), 'row_count': sum(f['row_count'] for f in files),
-              'skipped_count': len(errors), 'files': files, 'errors': errors}
+              'skipped_count': len(errors), 'filtered_out_count': filtered_out_count,
+              'filters': dict(filters), 'files': files, 'errors': errors}
     LOG.info('Loaded %d CSVs, %d rows; skipped %d files', result['file_count'], result['row_count'], len(errors))
     return result
 
@@ -119,14 +188,22 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         route = urlsplit(self.path)
-        if route.query or route.path not in ('/health', '/data'):
+        if route.path not in ('/health', '/data'):
             self.reply(404, {'error': 'Use GET /data or GET /health'})
             return
         if route.path == '/health':
+            if route.query:
+                self.reply(400, {'error': '/health does not accept query parameters'})
+                return
             self.reply(200, {'status': 'ok'})
             return
         try:
-            document = aggregate(self.data_dir, self.delimiter, self.encoding)
+            filters = parse_filters(route.query)
+        except ValueError as error:
+            self.reply(400, {'error': str(error)})
+            return
+        try:
+            document = aggregate(self.data_dir, self.delimiter, self.encoding, filters)
             payload = json.dumps(document, ensure_ascii=False, indent=2).encode('utf-8')
             save_json(self.output, payload)
         except Exception:

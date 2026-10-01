@@ -1,5 +1,8 @@
 # Factory data ROS 2 service — Humble / Python 3.10
 
+**Stackable filtering:** see [FILTERS.md](FILTERS.md) for examples and upgrade instructions.
+Version 0.2.0 changes the service request; rebuild both packages and all clients.
+
 Contains two ready-to-build packages:
 
 - `factory_data_interfaces`: custom `GetFactoryData.srv` (generated Python and C++ bindings).
@@ -69,13 +72,21 @@ ros2 service call /get_factory_data factory_data_interfaces/srv/GetFactoryData '
 Interface:
 
 ```srv
+string worker
+uint32 day
+uint32 month
+uint32 year
+string station
+string shift
+string date
 ---
 bool success
 string message
 string json_data
 ```
 
-Each request triggers a fresh server scan. `json_data` contains the complete JSON
+Each request triggers a fresh server scan with the supplied filters. Empty strings
+and zero numeric fields mean no filter. `json_data` contains the complete JSON
 text; callers parse it with `json.loads(response.json_data)` in Python, or a JSON
 library in C++. The service name is `get_factory_data` relative to the node's
 namespace; by default it is `/get_factory_data`.

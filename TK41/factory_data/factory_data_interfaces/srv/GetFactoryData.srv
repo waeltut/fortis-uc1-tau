@@ -1,4 +1,14 @@
-# Empty request: rebuild and retrieve all factory CSV data.
+# All supplied filters are combined with AND. Empty strings / zero mean no filter.
+# IDs are exact, case-sensitive strings without the W or Station_ prefix.
+string worker
+uint32 day
+uint32 month
+uint32 year
+string station
+# A = afternoon, M = morning, N = night.
+string shift
+# Optional exact date, YYYY-MM-DD. Must agree with day/month/year if supplied.
+string date
 ---
 bool success
 string message

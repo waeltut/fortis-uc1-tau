@@ -1,5 +1,8 @@
 # Factory data server
 
+**Stackable filtering:** see [FILTERS.md](FILTERS.md) for HTTP and ROS examples,
+filter rules, response fields and upgrade instructions.
+
 Python 3.10+; no pip dependencies. Start from the extracted directory:
 
 ```bash
@@ -7,7 +10,7 @@ cd factory_data_server
 python3 server.py
 ```
 
-Put CSVs in `data/` or any subfolder. Every `GET /data` recursively reads them,
+Put CSVs in `data/` or any subfolder. Every `GET /data` recursively scans filenames and reads matching CSVs,
 returns one JSON document and atomically replaces `output/factory_data.json`.
 There is no cached response. `GET /health` checks server availability without
 reading CSVs. No ROS installation is needed on this machine.

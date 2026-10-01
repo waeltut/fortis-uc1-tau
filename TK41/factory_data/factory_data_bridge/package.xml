@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <package format="3">
   <name>factory_data_bridge</name>
-  <version>0.1.0</version>
+  <version>0.2.0</version>
   <description>ROS 2 service bridge to the factory CSV HTTP server.</description>
   <maintainer email="maintainer@example.com">Factory Toolkit Maintainer</maintainer>
   <license>MIT</license>
