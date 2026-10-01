@@ -123,6 +123,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-humble-cartographer-ros \
     ros-humble-rtabmap-ros \
     ros-humble-teleop-twist-keyboard \
+    ros-humble-rosbridge-suite \
     && rm -rf /var/lib/apt/lists/*
 
 # -------------------------
