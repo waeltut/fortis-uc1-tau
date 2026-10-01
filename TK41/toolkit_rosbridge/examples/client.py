@@ -1,4 +1,30 @@
 #!/usr/bin/env python3
+
+# Check for correct websockets version! 
+# I ran into this error and don't want others to be confused
+import sys
+from importlib.metadata import PackageNotFoundError, version
+
+try:
+    installed_version = version("websockets")
+    major_version = int(installed_version.split(".")[0])
+except PackageNotFoundError:
+    sys.exit(
+        "ERROR: websockets is not installed.\n"
+        "Install the client's requirements.txt in its Python environment."
+    )
+
+if not 15 <= major_version < 17:
+    sys.exit(
+        f"ERROR: Unsupported websockets version: {installed_version}\n"
+        "This client requires websockets>=15,<17.\n"
+        "Install the client's requirements.txt in a separate virtual "
+        "environment to avoid changing shared dependencies."
+    )
+
+# Real program below.
+
+
 """Small ROS-free rosbridge JSON client. Python 3.10+; see --help."""
 import argparse
 import asyncio
