@@ -2,7 +2,7 @@
 
 General-purpose ROS 2 topic and service access for software outside ROS.
 Target: ROS 2 Humble on Ubuntu 22.04, including an existing Linux devcontainer.
-Transport: rosbridge JSON over WebSockets. No dependency on the factory CSV server.
+Transport: rosbridge JSON over WebSockets.
 
 This package configures upstream `rosbridge_server` and `rosapi`; it does not
 implement a competing bridge protocol. External applications can subscribe,
@@ -13,8 +13,7 @@ when their ROS packages are built and sourced on the bridge host.
 
 Extract the archive and put the complete `toolkit_rosbridge` directory anywhere
 under your existing ROS workspace's `src` tree (for example inside your tk4-dev
-repository). Do not nest it inside another ROS package. The archive does not
-contain or modify the rest of tk4-dev.
+repository).
 
 In your ROS container/host:
 
