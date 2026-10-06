@@ -50,13 +50,7 @@ def generate_launch_description():
     )
 
     # ---------------------------------------------------------
-    # MiR -> dual-arm mounting transform
-    #
-    # MiR TF:
-    #   base_odomprint -> base_link
-    #
-    # Combined:
-    #   base_odomprint -> base_link -> mur -> ...
+    # Combine MiR urdf tree with duo-ur urdf tree
     # ---------------------------------------------------------
 
     mir_to_mur_tf = Node(
@@ -76,6 +70,10 @@ def generate_launch_description():
         ],
     )
 
+    # ---------------------------------------------------------
+    # MUR dynamic footprint node -> arms affect footprint
+    # ---------------------------------------------------------
+
     mur_footprint = Node(
         package='mur_driver',
         executable='mur_footprint',
@@ -88,6 +86,10 @@ def generate_launch_description():
             'padding': 0.03,
         }],
     )
+
+    # ---------------------------------------------------------
+    # slam_config nav2_launch.py -> Navigation (enable/disable)
+    # ---------------------------------------------------------
 
     nav2 = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
