@@ -124,8 +124,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-humble-sensor-msgs \
     ros-humble-rqt \
     ros-humble-rqt-common-plugins \
-    ros-humble-navigation2 \
-    ros-humble-nav2-bringup \
     ros-humble-nav2-msgs \
     ros-humble-dwb-msgs \
     ros-humble-slam-toolbox \
@@ -143,32 +141,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-humble-ur-description \
     && rm -rf /var/lib/apt/lists/*
 
-# Build the tested Humble TF release independently of apt's ARM64 cadence.
-# Install real files: the build workspace can be removed afterwards.
-ARG GEOMETRY2_VERSION=0.25.24
-ARG GEOMETRY2_COMMIT=404b7224d623d614f18fa9738dbf1716403d857e
-RUN /bin/bash -c 'set -eo pipefail; \
-    source /opt/ros/humble/setup.bash; \
-    mkdir -p /tmp/tf2_build/src; \
-    git clone --depth 1 --branch "${GEOMETRY2_VERSION}" https://github.com/ros2/geometry2.git /tmp/tf2_build/src/geometry2; \
-    test "$(git -C /tmp/tf2_build/src/geometry2 rev-parse HEAD)" = "${GEOMETRY2_COMMIT}"; \
-    test -f /etc/ros/rosdep/sources.list.d/20-default.list || rosdep init; \
-    rosdep update --rosdistro humble; \
-    apt-get update; \
-    rosdep install --from-paths /tmp/tf2_build/src --ignore-src --rosdistro humble -y; \
-    cd /tmp/tf2_build; \
-    colcon build --merge-install --install-base /opt/tf2_fix --packages-up-to tf2_ros \
-        --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF; \
-    git -C src/geometry2 rev-parse HEAD > /opt/tf2_fix/geometry2-commit.txt; \
-    source /opt/tf2_fix/local_setup.bash; \
-    test "$(ros2 pkg prefix tf2_ros)" = /opt/tf2_fix; \
-    grep -q "<version>${GEOMETRY2_VERSION}</version>" /opt/tf2_fix/share/tf2_ros/package.xml; \
-    rm -rf /tmp/tf2_build /var/lib/apt/lists/*'
-
-ENV ROS_WORKSPACE=/home/${USERNAME}/ros2_ws
-ENV ROS_DOMAIN_ID=${ROS_DOMAIN_ID}
-COPY ros2_setup.bash /etc/ros/ros2_setup.bash
-
 # -------------------------
 # Non-root user
 # -------------------------
@@ -179,7 +151,7 @@ RUN groupadd -g $GID $USERNAME && \
 # -------------------------
 # ROS environment
 # -------------------------
-RUN echo "source /etc/ros/ros2_setup.bash" >> /etc/bash.bashrc
+RUN echo "source /opt/ros/humble/setup.bash" >> /etc/bash.bashrc
 
 USER $USERNAME
 WORKDIR /home/$USERNAME
@@ -195,14 +167,13 @@ RUN cd /home/$USERNAME/ros2_ws/src && \
 
 RUN chown -R $USERNAME:$USERNAME /home/$USERNAME/ros2_ws
 
-RUN /bin/bash -c "source /etc/ros/ros2_setup.bash && colcon build --symlink-install"
+RUN /bin/bash -c "source /opt/ros/humble/setup.bash && colcon build --symlink-install"
 
 
-RUN echo "source /etc/ros/ros2_setup.bash" >> /home/$USERNAME/.bashrc
+RUN echo "source /opt/ros/humble/setup.bash" >> /home/$USERNAME/.bashrc
+RUN echo "source /home/$USERNAME/ros2_ws/install/setup.bash" >> /home/$USERNAME/.bashrc
+RUN echo "export ROS_DOMAIN_ID=$ROS_DOMAIN_ID" >> /home/$USERNAME/.bashrc
 
 COPY ./ros2_entrypoint.sh /
-USER root
-RUN chmod 755 /ros2_entrypoint.sh
-USER $USERNAME
 ENTRYPOINT ["/ros2_entrypoint.sh"]
 CMD ["bash"]
