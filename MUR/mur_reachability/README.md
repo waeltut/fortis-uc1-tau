@@ -181,7 +181,7 @@ of a reachable task:
 
 ```bash
 ros2 service call /find_base_candidates mur_reachability/srv/FindBaseCandidates \
-"{target: {header: {frame_id: 'odom'}, pose: {position: {x: 1.0, y: 0.0, z: 0.8}, orientation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0}}}, time_budget: 20.0, max_verified_per_arm: 150}"
+"{target: {header: {frame_id: 'odom'}, pose: {position: {x: 2.5, y: 0.0, z: 0.8}, orientation: {x: 0.0, y: 1.0, z: 0.0, w: 1.0}}}, time_budget: 20.0, max_verified_per_arm: 150}"
 ```
 
 For less terminal output, publish the same pose to the goal topic. The node
@@ -189,7 +189,7 @@ logs a summary and publishes all visualisations:
 
 ```bash
 ros2 topic pub --once /reachability/goal_pose geometry_msgs/msg/PoseStamped \
-"{header: {frame_id: 'odom'}, pose: {position: {x: 1.0, y: 0.0, z: 0.8}, orientation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0}}}"
+"{header: {frame_id: 'odom'}, pose: {position: {x: 2.5, y: 0.0, z: 0.8}, orientation: {x: 0.0, y: 1.0, z: 0.0, w: 1.0}}}"
 ```
 
 Goals in any TF-connected frame are supported. A zero timestamp uses the
