@@ -1,0 +1,64 @@
+mur_base_selector:
+  ros__parameters:
+    fixed_frame: map
+    base_frame: base_link
+    reachability_frame: odom
+    # left / right / either / both. Launch arm_mode overrides this entry.
+    arm_mode: either
+    reachability_service: /find_base_candidates
+    # Explicit service request fields, independent of reachability.yaml defaults.
+    time_budget: 20.0
+    max_verified_per_arm: 150
+    reachability_timeout: 30.0
+    service_timeout: 3.0
+    planner_action: /compute_path_to_pose
+    planner_id: GridBased
+    global_costmap_service: /global_costmap/get_costmap
+    local_costmap_service: /local_costmap/get_costmap
+    footprint_topic: /local_costmap/published_footprint
+    joint_states_topic: /joint_states
+    scan_topic: /scan
+    lifecycle_services: [/planner_server/get_state, /controller_server/get_state]
+    arm_joints:
+      - left_shoulder_pan_joint
+      - left_shoulder_lift_joint
+      - left_elbow_joint
+      - left_wrist_1_joint
+      - left_wrist_2_joint
+      - left_wrist_3_joint
+      - right_shoulder_pan_joint
+      - right_shoulder_lift_joint
+      - right_elbow_joint
+      - right_wrist_1_joint
+      - right_wrist_2_joint
+      - right_wrist_3_joint
+    max_data_age: 3.0
+    tf_timeout: 0.5
+    # Additional padding beyond the published (possibly already padded) footprint.
+    footprint_padding: 0.02
+    allow_unknown: false
+    shortlist_size: 15
+    # Expand beyond the first shortlist only if it contains no feasible path.
+    max_path_checks: 60
+    planning_budget: 30.0
+    path_timeout: 3.0
+    cancel_timeout: 2.0
+    diversity_distance: 0.20
+    diversity_angle: 0.35
+    path_linear_step: 0.05
+    path_angular_step: 0.08
+    endpoint_xy_tolerance: 0.02
+    endpoint_yaw_tolerance: 0.03
+    # v1 requires stationary base/arms throughout selection.
+    base_motion_tolerance: 0.03
+    base_rotation_tolerance: 0.03
+    joint_motion_tolerance: 0.04
+    target_drift_tolerance: 0.005
+    target_rotation_drift_tolerance: 0.01
+    length_scale: 5.0
+    weight_path_length: 1.0
+    weight_cost: 2.0
+    weight_heading: 0.2
+    # Relative joint travel, NOT manipulability or joint-limit clearance.
+    weight_joint_motion: 0.2
+    selection_ttl: 15.0
