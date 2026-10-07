@@ -5,6 +5,7 @@ from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
+from ament_index_python.packages import get_package_share_directory
 import os
 
 
@@ -88,24 +89,9 @@ def generate_launch_description():
     )
 
     # ---------------------------------------------------------
-    # slam_config nav2_launch.py -> Navigation (enable/disable)
+    # MUR reachability node
     # ---------------------------------------------------------
 
-    nav2 = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            PathJoinSubstitution([
-                FindPackageShare("slam_config"),
-                "launch",
-                "nav2_launch.py",
-            ])
-        ),
-        launch_arguments={
-            "use_sim_time": "false",
-            "map": os.path.expanduser(
-                "~/ros2_ws/maps/leonardos.yaml"
-            ),
-        }.items(),
-    )
 
     return LaunchDescription(
         [
@@ -125,6 +111,5 @@ def generate_launch_description():
             dual_arm_driver,
             mir_to_mur_tf,
             mur_footprint,
-            #nav2, # Enable this if you want to launch slam_config/nav2_launch at the same time (good luck)
         ]
     )
