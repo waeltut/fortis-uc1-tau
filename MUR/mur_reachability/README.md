@@ -181,7 +181,7 @@ of a reachable task:
 
 ```bash
 ros2 service call /find_base_candidates mur_reachability/srv/FindBaseCandidates \
-"{target: {header: {frame_id: 'odom'}, pose: {position: {x: 1.0, y: 0.0, z: 0.8}, orientation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0}}}, time_budget: 3.0, max_verified_per_arm: 40}"
+"{target: {header: {frame_id: 'odom'}, pose: {position: {x: 1.0, y: 0.0, z: 0.8}, orientation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0}}}, time_budget: 20.0, max_verified_per_arm: 150}"
 ```
 
 For less terminal output, publish the same pose to the goal topic. The node

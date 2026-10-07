@@ -24,8 +24,8 @@
     max_candidates_per_arm: 2000
     seeds_per_cell: 3
     # Includes snapshot, search and verification; cooperative, not hard realtime.
-    query_budget: 3.0
-    max_verified_per_arm: 40
+    query_budget: 20.0
+    max_verified_per_arm: 150
     ik_timeout: 0.008
     verification_position_tolerance: 0.001
     verification_orientation_tolerance: 0.01
