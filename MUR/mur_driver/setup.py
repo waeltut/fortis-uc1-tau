@@ -19,7 +19,7 @@ setup(
         ),
         (
             os.path.join("share", package_name, "launch"),
-            glob("launch/*.launch.py"),
+            glob("launch/*.py"),
         ),
     ],
     install_requires=["setuptools", 'trimesh>=3.9,<5'],
