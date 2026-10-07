@@ -9,7 +9,7 @@
     right_group: right_ur_manipulator
     left_tip: left_tcp
     right_tip: right_tcp
-    cache_file: ~/.ros/mur_reachability/reachability.bin
+    cache_file: ~/ros2_ws/src/MUR/mur_reachability/config/reachability.bin
     cross_margin: 0.20
     joint_limit_margin: 0.02
     # Offline attempts per arm, FK + self collision. Not a minimum accepted count.
