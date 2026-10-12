@@ -12,6 +12,7 @@ import sys
 import threading
 import types
 import unittest
+from unittest.mock import patch
 from types import SimpleNamespace as NS
 
 
@@ -130,6 +131,102 @@ def node(res=None):
 
 
 class WorkflowTests(unittest.TestCase):
+    def test_cleared_path_has_fixed_frame_and_timestamp(self):
+        n = node()
+        n.invalidate()
+        cleared = n.path_pub.messages[-1]
+        self.assertEqual(cleared.header.frame_id, 'map')
+        self.assertEqual(cleared.header.stamp.sec, 123)
+
+    def test_budget_during_later_candidate_keeps_completed_candidate(self):
+        n = node()
+        n.cfg['shortlist_size'] = 3
+        n.candidates = lambda *a: [m.Candidate(i, (i+1., 0., 0.), 'left', [], 0.) for i in range(3)]
+        checks = []
+        def check(*a):
+            checks.append(a)
+            if len(checks) == 2:
+                raise m.CheckingBudgetExhausted('budget expired halfway through second path')
+            return True, '', .2
+        n.check_path = check
+        n.run(PoseStamped())
+        self.assertEqual(len(checks), 3)  # first, incomplete second, fresh validation of first
+        self.assertEqual(len(n.pose_pub.messages), 1)
+        self.assertTrue(n.valid_pub.messages[-1].data)
+        result = json.loads(n.result_pub.messages[-1].data)
+        self.assertEqual(result['pose'], [1., 0., 0.])
+        self.assertEqual(result['feasible_paths'], 1)
+
+    def test_count_limit_reports_rejections_in_final_log_and_live_diagnostics(self):
+        n = node()
+        n.cfg['max_path_checks'] = 2
+        n.candidates = lambda *a: [m.Candidate(i, (i+1., 0., 0.), 'left', [], 0.) for i in range(3)]
+        n.compute_path = lambda *a: (None, 'start_position_mismatch')
+        logs = []
+        n.get_logger = lambda: NS(info=logs.append)
+        n.run(PoseStamped())
+        final = json.loads(n.status_pub.messages[-1].data)
+        self.assertIn('max_path_checks reached', final['message'])
+        self.assertIn('completed_checks=2', final['message'])
+        self.assertIn('start_position_mismatch=2', final['message'])
+        self.assertEqual(sum('[candidate ' in line for line in logs), 2)
+        snapshots = [json.loads(msg.data)['candidates'] for msg in n.diagnostics_pub.messages]
+        self.assertTrue(any(sum(c['state']=='start_position_mismatch' for c in s)==1 for s in snapshots))
+        self.assertFalse(n.pose_pub.messages)
+
+    def test_tf_receiver_owns_separate_node_and_executor(self):
+        class FakeNode:
+            def __init__(self, name, **kw):
+                self.name, self.kw, self.destroyed = name, kw, False
+            def destroy_node(self):
+                self.destroyed = True
+        class FakeExecutor:
+            def __init__(self, **kw):
+                self.nodes, self.stop, self.started = [], threading.Event(), threading.Event()
+            def add_node(self, n):
+                self.nodes.append(n)
+            def spin(self):
+                self.started.set()
+                self.stop.wait(2.)
+            def shutdown(self):
+                self.stop.set()
+        owner = NS(context=object(), get_name=lambda: 'mur_base_selector',
+                   get_namespace=lambda: '/', get_parameter=lambda _: NS(value=True))
+        with patch.dict(m.__dict__, Node=FakeNode, SingleThreadedExecutor=FakeExecutor,
+                        Parameter=lambda name, **kw: NS(name=name, **kw),
+                        Buffer=lambda **kw: NS(**kw),
+                        TransformListener=lambda b, n: NS(unregister=lambda: None),
+                        ExternalShutdownException=RuntimeError):
+            receiver = m.TfReceiver(owner)
+            try:
+                self.assertTrue(receiver.executor.started.wait(1.))
+                self.assertEqual(receiver.executor.nodes, [receiver.node])
+                self.assertIsNot(receiver.node, owner)
+                self.assertIs(receiver.buffer.node, receiver.node)
+                self.assertTrue(receiver.node.kw['parameter_overrides'][0].value)
+                self.assertFalse(receiver.node.kw['use_global_arguments'])
+            finally:
+                receiver.close()
+            self.assertFalse(receiver.thread.is_alive())
+            self.assertTrue(receiver.node.destroyed)
+
+    def test_tf_diagnostics_use_same_buffer_and_ros_clock(self):
+        n = node()
+        n.get_clock = lambda: NS(now=lambda: NS(nanoseconds=100_000_000_000))
+        stamps = {('map', 'odom'): 99, ('odom', 'base_link'): 92}
+        n.tf = NS(lookup_transform=lambda p, c, t: NS(header=NS(stamp=NS(sec=stamps[p,c], nanosec=0))))
+        report = n.tf_age_diagnostics()
+        self.assertIn('map->odom: stamp=99.000, age=1.000s', report)
+        self.assertIn('odom->base_link: stamp=92.000, age=8.000s', report)
+        self.assertIn('ros_now=100.000', report)
+
+    def test_freshness_limit_remains_three_seconds(self):
+        n = node()
+        n.get_clock = lambda: NS(now=lambda: NS(nanoseconds=100_000_000_000))
+        n.check_age(NS(sec=99, nanosec=600_000_000), 'base TF')
+        with self.assertRaises(m.SelectionError):
+            n.check_age(NS(sec=92, nanosec=200_000_000), 'base TF')
+
     def test_success_uses_service_budget_and_count(self):
         n = node()
         n.run(PoseStamped())
@@ -239,6 +336,29 @@ class WorkflowTests(unittest.TestCase):
         self.assertFalse(n.plan_pending)
         path.poses[-1].pose.position.x = .8
         self.assertEqual(n.compute_path(c, (0, 0, 0), m.time.monotonic()+10)[1], 'endpoint_position_mismatch')
+
+    def test_reported_22mm_start_offset_accepted_but_goal_tolerance_unchanged(self):
+        n = node()
+        del n.compute_path
+        start = (-.007, -.032, 0.)
+        first = (-.020, -.050, 0.)
+        goal = (1., 0., 0.)
+        path = NS(header=NS(frame_id='map'),
+                  poses=[m.pose_msg(first, 'map'), m.pose_msg(goal, 'map')])
+        terminal = Future(NS(status=4, result=NS(path=path)))
+        handle = NS(accepted=True, get_result_async=lambda: terminal)
+        n.planner.send_goal_async = lambda _: Future(handle)
+        c = m.Candidate(0, goal, 'left', [], 0.)
+        poses, reason = n.compute_path(c, start, m.time.monotonic()+10)
+        self.assertEqual(reason, '')
+        self.assertEqual(poses[0], start)  # actual pose retained for swept collision check
+        self.assertEqual(poses[1], first)
+        self.assertEqual(poses[-1], goal)
+        path.poses[-1].pose.position.x = 1.0222
+        self.assertEqual(n.compute_path(c, start, m.time.monotonic()+10)[1], 'endpoint_position_mismatch')
+        path.poses[-1].pose.position.x = 1.
+        path.poses[0].pose.position.x = start[0]+.06
+        self.assertEqual(n.compute_path(c, start, m.time.monotonic()+10)[1], 'start_position_mismatch')
 
 
 if __name__ == '__main__':

@@ -1,5 +1,72 @@
 # MUR base selector
 
+### 0.1.5 — frame on empty path messages
+
+The empty path used to clear a result at startup, cancellation, expiry or failure
+now includes `fixed_frame` and the current timestamp. Previously it had an empty
+frame ID, causing Lichtblick to report a missing transform from `""` to `map`.
+Normal selected paths already had the correct frame. A result still expires
+after the configured 15 s TTL and its path is intentionally cleared then.
+
+### 0.1.4 — preserve completed candidates and speed up sweeps
+
+If time expires partway through footprint-checking another candidate, that
+partial candidate is marked incomplete and the best fully checked candidate
+proceeds to fresh-map revalidation. Previously this discarded all successes.
+No partially checked candidate can be selected.
+
+Straight translation sweeps now avoid unnecessary circular-buffer construction.
+Rotation sweeps use a conservative square enclosing the angular chord-error
+disk. Uniform non-obstacle costmap rectangles bypass polygon rasterisation.
+The configured spatial step is used directly: continuous swept polygons cover
+the entire segment, so additional half-cell subdivision is unnecessary.
+The default shortlist is now 5 (previously 15); replace the YAML too, or edit
+`shortlist_size: 5` in your existing config. The time budget stays 30 s and
+the expanded-search maximum stays 60. Successful-candidate logs split Nav2
+action time from footprint-checking time. Final fresh-map validation remains
+required. ROS/robot performance must still be measured in the deployment.
+
+### 0.1.3 — separate path-start tolerance
+
+Fixes rejection of every path when the planner's first point differs from the
+actual robot position by slightly more than the manipulation endpoint limit.
+The reported case was 0.0222 m start error versus the former 0.0200 m limit.
+`start_xy_tolerance` now defaults to 0.05 m independently of the unchanged
+`endpoint_xy_tolerance` (0.02 m). The exact measured start pose is prepended
+to the returned path, and that entire connector and its rotations are still
+checked using the full footprint against both costmaps. This does not move
+the selected base goal or relax arm reachability checks. Larger start errors
+are still rejected. Old YAML files may omit the new key; its default applies.
+
+### 0.1.2 — rejection diagnostics in the launch terminal
+
+Every completed path check now logs its outcome directly as `[candidate ID]`.
+Position/yaw mismatch logs include the measured error and configured limit.
+Footprint rejection logs identify the current/start footprint or later sweep.
+Candidate diagnostics are refreshed after each completed check instead of
+remaining at the initial destination-filter snapshot throughout planning.
+The final failure lists rejection counts and distinguishes the path-count
+limit from the time limit and exhaustion of available candidates.
+No collision checks, endpoint tolerances or search limits have been relaxed.
+
+### 0.1.1 — TF reception update
+
+TF reception now has a dedicated node, executor and thread. The selector's
+sensor/service/action callbacks use a separate single-threaded executor;
+expensive selection work remains on its existing worker thread. The TF node
+inherits `use_sim_time` explicitly and avoids the launch's node-name remap.
+Its subscriptions use the standard global `/tf` and `/tf_static` topics.
+
+This addresses a suspected executor backlog observed when the selector saw
+7–8 s old TF while a separate listener saw 0.3–0.4 s old TF. The runtime cause
+has not been proven on the robot. The 3 s freshness limit is unchanged.
+On another age failure, logs include this selector's ROS time, wall time,
+and separate fixed-to-reachability and reachability-to-base transform stamps.
+These distinguish buffer lag from different clock readings or stale upstream TF.
+
+Replace the package, rebuild it, and restart only the selector. Republish the
+target after restarting; the in-memory last target is not retained.
+
 ROS 2 Humble / Ubuntu 22.04 `ament_python` package. Selects a manipulation base
 pose by calling `/find_base_candidates`, filtering the **verified** service
 response, and asking Nav2 to compute paths. It publishes a selected pose and
@@ -174,7 +241,7 @@ not supplied by the existing service. Nor is a truncated response treated as a
 complete workspace from which a true reachability margin could be inferred.
 These can be added when the service exposes appropriate metrics.
 
-The first shortlist contains up to 15 candidates. If none pass, the search
+The first shortlist contains up to 5 candidates. If none pass, the search
 continues up to 60 path requests or the 30 s planning/checking budget. A planner
 timeout aborts this selection attempt and cancels its action; it is not reported
 as proof of physical unreachability. Some candidates will remain unexamined.
@@ -225,11 +292,12 @@ colliding with the reachability launch's `config` argument.
 | `time_budget` | 20.0 s | Reachability service calculation budget |
 | `max_verified_per_arm` | 150 | Returned pose limit per arm |
 | `reachability_timeout` | 30.0 s | Client wait limit; larger than server budget |
-| `shortlist_size` | 15 | Initial path checks |
+| `shortlist_size` | 5 | Initial path checks |
 | `max_path_checks` | 60 | Expanded-search limit |
 | `planning_budget` | 30.0 s | Path request/checking stage budget |
 | `path_timeout` | 3.0 s | Per-action send/result wait limit |
 | `footprint_padding` | 0.02 m | Additional travel footprint margin |
+| `start_xy_tolerance` | 0.05 m | Maximum path-start offset; connecting segment is collision checked |
 | `endpoint_xy_tolerance` | 0.02 m | Maximum planner endpoint displacement |
 | `endpoint_yaw_tolerance` | 0.03 rad | Maximum planner endpoint yaw error |
 | `max_data_age` | 3.0 s | Data/stream freshness bound |

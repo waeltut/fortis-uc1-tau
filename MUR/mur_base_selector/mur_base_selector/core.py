@@ -86,6 +86,12 @@ class Grid:
         end = np.minimum(np.floor(hi+1e-9).astype(int), [self.width-1, self.height-1])
         if (start > end).any():
             return Check(True, covered=False)
+        # Uniform rectangles need no polygon rasterisation: every intersected
+        # cell has the same value. Collision values still use exact overlap.
+        block = self.data[start[1]:end[1]+1, start[0]:end[0]+1]
+        value = int(block.flat[0])
+        if value < 254 and np.all(block == value):
+            return Check(True, cost=value/253., covered=covered)
         xx, yy = np.meshgrid(np.arange(start[0], end[0]+1), np.arange(start[1], end[1]+1))
         centres = np.column_stack((xx.ravel()+.5, yy.ravel()+.5))
         edges = np.roll(poly, -1, axis=0)-poly
@@ -122,12 +128,19 @@ def swept_polygons(footprint, poses, linear_step, angular_step):
         n = max(1, math.ceil(math.hypot(b[0]-a[0], b[1]-a[1])/linear_step),
                 math.ceil(abs(dyaw)/angular_step))
         prev = transform_points(footprint, a)
-        error = radius*(1-math.cos(abs(dyaw)/n/2)) + 1e-9
+        error = radius*(1-math.cos(abs(dyaw)/n/2))
         for i in range(1, n+1):
             t = i/n
             p = (a[0]+t*(b[0]-a[0]), a[1]+t*(b[1]-a[1]), a[2]+t*dyaw)
             curr = transform_points(footprint, p)
-            yield padded(hull(np.vstack((prev, curr))), error)
+            swept = hull(np.vstack((prev, curr)))
+            if error > 0:
+                # A square encloses the chord-error disk. Four offsets suffice;
+                # rebuilding a 16-sided buffer for every sweep was expensive.
+                offsets = np.array([[-error, -error], [error, -error],
+                                    [error, error], [-error, error]])
+                swept = hull((swept[:, None, :] + offsets).reshape(-1, 2))
+            yield swept
             prev = curr
 
 

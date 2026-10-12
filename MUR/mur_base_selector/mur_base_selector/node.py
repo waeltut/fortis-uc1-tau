@@ -1,5 +1,6 @@
 """ROS 2 Humble selector. It never sends navigation or arm execution goals."""
 import copy
+from collections import Counter
 from dataclasses import dataclass, field
 import json
 import math
@@ -11,8 +12,9 @@ import rclpy
 from rclpy.action import ActionClient
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.duration import Duration
-from rclpy.executors import MultiThreadedExecutor
+from rclpy.executors import SingleThreadedExecutor, ExternalShutdownException
 from rclpy.node import Node
+from rclpy.parameter import Parameter
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from rclpy.time import Time
 from rcl_interfaces.msg import SetParametersResult
@@ -49,10 +51,11 @@ DEFAULTS = {
                    for joint in ('shoulder_pan', 'shoulder_lift', 'elbow', 'wrist_1', 'wrist_2', 'wrist_3')],
     'max_data_age': 3.0, 'tf_timeout': 0.5,
     'footprint_padding': 0.02, 'allow_unknown': False,
-    'shortlist_size': 15, 'max_path_checks': 60,
+    'shortlist_size': 5, 'max_path_checks': 60,
     'planning_budget': 30.0, 'path_timeout': 3.0, 'cancel_timeout': 2.0,
     'diversity_distance': 0.20, 'diversity_angle': 0.35,
     'path_linear_step': 0.05, 'path_angular_step': 0.08,
+    'start_xy_tolerance': 0.05,
     'endpoint_xy_tolerance': 0.02, 'endpoint_yaw_tolerance': 0.03,
     'base_motion_tolerance': 0.03, 'base_rotation_tolerance': 0.03,
     'joint_motion_tolerance': 0.04,
@@ -68,6 +71,10 @@ class SelectionError(RuntimeError):
 
 
 class Cancelled(SelectionError):
+    pass
+
+
+class CheckingBudgetExhausted(SelectionError):
     pass
 
 
@@ -121,6 +128,39 @@ class Candidate:
     path: list = field(default_factory=list)
     length: float = 0.0
     cost: float = 0.0
+    detail: str = ''
+
+
+class TfReceiver:
+    """A TF-only node owned by exactly one dedicated executor/thread.
+
+    Never add the selector node to this executor: a node must not be spun by
+    two executors. Explicit clock propagation also supports use_sim_time.
+    """
+    def __init__(self, owner):
+        self.node = Node(
+            owner.get_name() + '_tf_listener', namespace=owner.get_namespace(),
+            context=owner.context, use_global_arguments=False,
+            parameter_overrides=[Parameter('use_sim_time', value=
+                owner.get_parameter('use_sim_time').value)])
+        self.buffer = Buffer(cache_time=Duration(seconds=120.0), node=self.node)
+        self.listener = TransformListener(self.buffer, self.node)
+        self.executor = SingleThreadedExecutor(context=owner.context)
+        self.executor.add_node(self.node)
+        self.thread = threading.Thread(target=self.spin, name='mur_selector_tf', daemon=True)
+        self.thread.start()
+
+    def spin(self):
+        try:
+            self.executor.spin()
+        except ExternalShutdownException:
+            pass
+
+    def close(self):
+        self.executor.shutdown()
+        self.thread.join()
+        self.listener.unregister()
+        self.node.destroy_node()
 
 
 class BaseSelector(Node):
@@ -133,8 +173,8 @@ class BaseSelector(Node):
         # Config is deliberately immutable during a query (restart to change it).
         self.add_on_set_parameters_callback(self.parameters_changed)
         self.group = ReentrantCallbackGroup()
-        self.tf = Buffer(cache_time=Duration(seconds=120.0))
-        self.listener = TransformListener(self.tf, self)
+        self.tf_receiver = TfReceiver(self)
+        self.tf = self.tf_receiver.buffer
         self.lock = threading.RLock()
         self.stop = threading.Event()
         self.busy = False
@@ -217,7 +257,10 @@ class BaseSelector(Node):
             self.selected_context = None
         self.valid_pub.publish(Bool(data=False))
         self.result_pub.publish(String(data=json.dumps({'request_id': self.sequence, 'valid': False})))
-        self.path_pub.publish(Path())
+        empty_path = Path()
+        empty_path.header = pose_msg((0., 0., 0.), self.cfg['fixed_frame']).header
+        empty_path.header.stamp = self.get_clock().now().to_msg()
+        self.path_pub.publish(empty_path)
         self.markers_pub.publish(MarkerArray(markers=[Marker(action=Marker.DELETEALL)]))
         self.diagnostics_pub.publish(String(data=json.dumps({'request_id': self.sequence, 'candidates': []})))
 
@@ -358,11 +401,32 @@ class BaseSelector(Node):
 
     def robot_pose(self):
         tf = self.lookup(self.cfg['fixed_frame'], self.cfg['base_frame'])
-        self.check_age(tf.header.stamp, 'base TF')
+        try:
+            self.check_age(tf.header.stamp, 'base TF')
+        except SelectionError as error:
+            raise SelectionError(f'{error}; {self.tf_age_diagnostics()}') from error
         p = PoseStamped().pose
         p.position.x, p.position.y = tf.transform.translation.x, tf.transform.translation.y
         p.orientation = tf.transform.rotation
         return planar(p)
+
+    def tf_age_diagnostics(self):
+        """Report the SAME buffer/clock that rejected the query, not a new listener."""
+        now = self.get_clock().now().nanoseconds / 1e9
+        details = [f'ros_now={now:.3f}', f'wall_now={time.time():.3f}']
+        pairs = [(self.cfg['fixed_frame'], self.cfg['reachability_frame']),
+                 (self.cfg['reachability_frame'], self.cfg['base_frame'])]
+        for parent, child in pairs:
+            if parent == child:
+                continue
+            try:
+                # Nonblocking diagnostics must not stall while explaining another failure.
+                stamp = self.tf.lookup_transform(parent, child, Time()).header.stamp
+                seconds = stamp_seconds(stamp)
+                details.append(f'{parent}->{child}: stamp={seconds:.3f}, age={now-seconds:.3f}s')
+            except Exception as e:
+                details.append(f'{parent}->{child}: unavailable ({e})')
+        return '; '.join(details)
 
     def check_age(self, stamp, label):
         age = self.get_clock().now().nanoseconds/1e9-stamp_seconds(stamp)
@@ -544,9 +608,19 @@ class BaseSelector(Node):
                     raise SelectionError('Inconsistent path frames')
                 poses.append(compose(tf, planar(p.pose)))
             for actual, wanted, name in ((poses[0], start, 'start'), (poses[-1], candidate.pose, 'endpoint')):
-                if math.hypot(actual[0]-wanted[0], actual[1]-wanted[1]) > self.cfg['endpoint_xy_tolerance']:
+                error = math.hypot(actual[0]-wanted[0], actual[1]-wanted[1])
+                # The path's discretised start is not the manipulation goal.
+                # Allow a short connector, which check_path sweeps in full.
+                limit = self.cfg['start_xy_tolerance'] if name == 'start' else self.cfg['endpoint_xy_tolerance']
+                if error > limit:
+                    candidate.detail = (f'{name} XY error={error:.4f} m, '
+                        f'limit={limit:.4f} m; '
+                        f'path=({actual[0]:.4f}, {actual[1]:.4f}), '
+                        f'requested=({wanted[0]:.4f}, {wanted[1]:.4f})')
                     return None, name+'_position_mismatch'
             if abs(angle(poses[-1][2]-candidate.pose[2])) > self.cfg['endpoint_yaw_tolerance']:
+                candidate.detail = (f'endpoint yaw error={abs(angle(poses[-1][2]-candidate.pose[2])):.4f} rad, '
+                                    f'limit={self.cfg["endpoint_yaw_tolerance"]:.4f} rad')
                 return None, 'endpoint_heading_mismatch'
             # Explicitly validate the short start connector and any initial rotation.
             return [start]+poses+[candidate.pose], ''
@@ -574,19 +648,29 @@ class BaseSelector(Node):
 
     def check_path(self, poses, footprint, maps, deadline=None):
         costs = []
-        step = min(self.cfg['path_linear_step'], min(g.resolution for g, _ in maps)*.5)
-        for polygon in swept_polygons(footprint, poses, step, self.cfg['path_angular_step']):
+        self.path_failure_detail = ''
+        # Every segment is a swept polygon, not isolated point samples. There
+        # are no unchecked spatial gaps requiring half-cell oversampling.
+        step = self.cfg['path_linear_step']
+        for index, polygon in enumerate(swept_polygons(footprint, poses, step, self.cfg['path_angular_step'])):
             self.checkpoint()
             if deadline is not None and time.monotonic() > deadline:
-                raise SelectionError('Planning/checking budget exhausted')
+                raise CheckingBudgetExhausted('Planning/checking budget exhausted')
             valid, reason, cost = self.polygon_check(polygon, maps)
             if not valid:
+                self.path_failure_detail = ('current/start footprint' if index == 0
+                                            else f'path sweep {index}')
                 return False, reason, 0.
             costs.append(cost)
         return True, '', float(np.mean(costs))
 
     def weights(self):
         return [self.cfg['weight_'+k] for k in ('path_length', 'cost', 'heading', 'joint_motion')]
+
+    def report_candidate(self, candidate, candidates):
+        suffix = f'; {candidate.detail}' if candidate.detail else ''
+        self.get_logger().info(f'[candidate {candidate.id}] {candidate.state}{suffix}')
+        self.publish_candidate_diagnostics(candidates)
 
     def run(self, target):
         started = time.monotonic()
@@ -648,6 +732,7 @@ class BaseSelector(Node):
                 self.guard_motion(start, joints)
                 self.status('planning', f'Checking candidate {checked+1}/{min(len(ordered), self.cfg["max_path_checks"])}',
                             feasible=len(feasible), candidates=len(candidates))
+                plan_started = time.monotonic()
                 try:
                     poses, reason = self.compute_path(c, start, deadline)
                 except Cancelled:
@@ -657,23 +742,46 @@ class BaseSelector(Node):
                     # Abort this batch rather than racing an unresolved Nav2 action.
                     raise SelectionError(f'Planning interrupted: {e}') from e
                 checked += 1
+                plan_seconds = time.monotonic()-plan_started
                 if poses is None:
                     c.state = reason
+                    self.report_candidate(c, candidates)
                     continue
-                valid, reason, cost = self.check_path(poses, footprint, maps, deadline)
+                check_started = time.monotonic()
+                try:
+                    valid, reason, cost = self.check_path(poses, footprint, maps, deadline)
+                except CheckingBudgetExhausted:
+                    c.state = 'path_check_incomplete_budget'
+                    c.detail = f'Keeping {len(feasible)} fully checked candidates; partial check is not accepted'
+                    self.report_candidate(c, candidates)
+                    break
+                check_seconds = time.monotonic()-check_started
                 if not valid:
                     c.state = 'path_'+reason
+                    c.detail = getattr(self, 'path_failure_detail', '')
+                    self.report_candidate(c, candidates)
                     continue
                 c.path, c.length, c.cost = poses, path_length(poses), cost
                 c.score = score(c.length, cost, c.pose[2]-start[2], c.joint_cost,
                                 self.weights(), self.cfg['length_scale'])
                 c.state = 'path_checked'
+                c.detail = f'Nav2={plan_seconds:.3f}s; footprint={check_seconds:.3f}s; poses={len(poses)}'
+                self.report_candidate(c, candidates)
                 feasible.append(c)
                 # First shortlist is evaluated fully; expand only if none passed.
                 if checked >= self.cfg['shortlist_size'] and feasible:
                     break
             if not feasible:
-                raise SelectionError('No path-checked candidate within the selection budget; not proof of impossibility')
+                if checked >= len(ordered):
+                    stop_reason = 'all destination-clear candidates examined'
+                elif checked >= self.cfg['max_path_checks']:
+                    stop_reason = 'max_path_checks reached'
+                else:
+                    stop_reason = 'planning time budget reached'
+                counts = Counter(c.state for c in candidates)
+                summary = ', '.join(f'{state}={count}' for state, count in sorted(counts.items()))
+                raise SelectionError(f'No path-checked candidate: {stop_reason}; '
+                                     f'completed_checks={checked}; {summary}')
             self.status('revalidating', 'Refreshing costmaps and checking finalists')
             self.guard_motion(start, joints)
             maps = self.costmaps()
@@ -733,11 +841,15 @@ class BaseSelector(Node):
             with self.lock:
                 self.busy = False
 
-    def publish_markers(self, candidates):
+    def publish_candidate_diagnostics(self, candidates):
         data = [{'id': c.id, 'arm': c.arm, 'pose': list(c.pose), 'state': c.state,
-                 'score': c.score if math.isfinite(c.score) else None} for c in candidates]
+                 'score': c.score if math.isfinite(c.score) else None,
+                 'detail': c.detail} for c in candidates]
         self.diagnostics_pub.publish(String(data=json.dumps({'request_id': self.sequence,
                                                            'candidates': data}, allow_nan=False)))
+
+    def publish_markers(self, candidates):
+        self.publish_candidate_diagnostics(candidates)
         markers = [Marker(action=Marker.DELETEALL)]
         for c in candidates:
             m = Marker()
@@ -760,7 +872,9 @@ class BaseSelector(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = BaseSelector()
-    executor = MultiThreadedExecutor(num_threads=4)
+    # Work is already on a separate worker thread. Keep message/future dispatch
+    # single-threaded; the independent TF executor stays responsive throughout.
+    executor = SingleThreadedExecutor()
     executor.add_node(node)
     try:
         executor.spin()
@@ -774,4 +888,5 @@ def main(args=None):
         if node.worker:
             node.worker.join(timeout=5.0)
         executor.shutdown(timeout_sec=2.0)
+        node.tf_receiver.close()
         node.destroy_node()

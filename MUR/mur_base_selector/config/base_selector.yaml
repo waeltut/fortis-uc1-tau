@@ -37,9 +37,9 @@ mur_base_selector:
     # Additional padding beyond the published (possibly already padded) footprint.
     footprint_padding: 0.02
     allow_unknown: false
-    shortlist_size: 15
+    shortlist_size: 20
     # Expand beyond the first shortlist only if it contains no feasible path.
-    max_path_checks: 60
+    max_path_checks: 20
     planning_budget: 30.0
     path_timeout: 3.0
     cancel_timeout: 2.0
@@ -47,6 +47,9 @@ mur_base_selector:
     diversity_angle: 0.35
     path_linear_step: 0.05
     path_angular_step: 0.08
+    # Separate allowance for the planner's discrete start point. The short
+    # connector from the true robot pose is still swept for collisions.
+    start_xy_tolerance: 0.05
     endpoint_xy_tolerance: 0.02
     endpoint_yaw_tolerance: 0.03
     # v1 requires stationary base/arms throughout selection.
