@@ -161,7 +161,7 @@ def path_length(poses):
     return sum(math.hypot(b[0]-a[0], b[1]-a[1]) for a, b in zip(poses, poses[1:]))
 
 
-def score(length, cost, turn, joint_motion, weights, length_scale):
-    # Fixed scales avoid changing rankings when unrelated candidates are added.
-    return (weights[0]*(length/length_scale) + weights[1]*cost
-            + weights[2]*abs(angle(turn))/math.pi + weights[3]*joint_motion)
+
+
+
+

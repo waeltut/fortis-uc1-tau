@@ -1,6 +1,5 @@
 """ROS 2 Humble selector. It never sends navigation or arm execution goals."""
 import copy
-from collections import Counter
 from dataclasses import dataclass, field
 import json
 import math
@@ -27,20 +26,21 @@ from std_srvs.srv import Trigger
 from nav_msgs.msg import Path
 from nav2_msgs.action import ComputePathToPose
 from nav2_msgs.srv import GetCostmap
-from mur_reachability.srv import FindBaseCandidates
 from tf2_ros import Buffer, TransformListener
 from visualization_msgs.msg import Marker, MarkerArray
 
 from .core import (Grid, hull, padded, transform_points, compose, angle,
-                   swept_polygons, path_length, score, diverse_order)
+                   swept_polygons)
 
 
 DEFAULTS = {
-    'fixed_frame': 'map', 'base_frame': 'base_link', 'reachability_frame': 'odom',
-    'arm_mode': 'either', 'reachability_service': '/find_base_candidates',
-    'time_budget': 20.0, 'max_verified_per_arm': 150,
-    'reachability_timeout': 30.0, 'service_timeout': 3.0,
-    'planner_action': '/compute_path_to_pose', 'planner_id': 'GridBased',
+    'fixed_frame': 'map',
+    'base_frame': 'base_link',
+    'reachability_frame': 'odom',
+    'arm_mode': 'either',
+    'service_timeout': 3.0,
+    'planner_action': '/compute_path_to_pose',
+    'planner_id': 'GridBased',
     'global_costmap_service': '/global_costmap/get_costmap',
     'local_costmap_service': '/local_costmap/get_costmap',
     'footprint_topic': '/local_costmap/published_footprint',
@@ -49,19 +49,24 @@ DEFAULTS = {
     'lifecycle_services': ['/planner_server/get_state', '/controller_server/get_state'],
     'arm_joints': [f'{side}_{joint}_joint' for side in ('left', 'right')
                    for joint in ('shoulder_pan', 'shoulder_lift', 'elbow', 'wrist_1', 'wrist_2', 'wrist_3')],
-    'max_data_age': 3.0, 'tf_timeout': 0.5,
-    'footprint_padding': 0.02, 'allow_unknown': False,
-    'shortlist_size': 5, 'max_path_checks': 60,
-    'planning_budget': 30.0, 'path_timeout': 3.0, 'cancel_timeout': 2.0,
-    'diversity_distance': 0.20, 'diversity_angle': 0.35,
-    'path_linear_step': 0.05, 'path_angular_step': 0.08,
+    'max_data_age': 3.0,
+    'tf_timeout': 0.5,
+    'footprint_padding': 0.02,
+    'allow_unknown': False,
+    'max_path_checks': 60,
+    'path_timeout': 3.0,
+    'cancel_timeout': 2.0,
+    'diversity_distance': 0.20,
+    'diversity_angle': 0.35,
+    'path_linear_step': 0.05,
+    'path_angular_step': 0.08,
     'start_xy_tolerance': 0.05,
-    'endpoint_xy_tolerance': 0.02, 'endpoint_yaw_tolerance': 0.03,
-    'base_motion_tolerance': 0.03, 'base_rotation_tolerance': 0.03,
+    'endpoint_xy_tolerance': 0.02,
+    'endpoint_yaw_tolerance': 0.03,
+    'base_motion_tolerance': 0.03,
+    'base_rotation_tolerance': 0.03,
     'joint_motion_tolerance': 0.04,
-    'target_drift_tolerance': 0.005, 'target_rotation_drift_tolerance': 0.01,
-    'length_scale': 5.0, 'weight_path_length': 1.0,
-    'weight_cost': 2.0, 'weight_heading': 0.2, 'weight_joint_motion': 0.2,
+    'length_scale': 5.0,
     'selection_ttl': 15.0,
 }
 
@@ -120,8 +125,6 @@ class Candidate:
     id: int
     pose: tuple
     arm: str
-    solutions: list
-    joint_cost: float
     preliminary: float = 0.0
     score: float = math.inf
     state: str = 'unexamined'
@@ -164,9 +167,9 @@ class TfReceiver:
 
 
 class BaseSelector(Node):
-    def __init__(self):
+    def __init__(self, defaults=None):
         super().__init__('mur_base_selector')
-        for key, value in DEFAULTS.items():
+        for key, value in {**DEFAULTS, **(defaults or {})}.items():
             self.declare_parameter(key, value)
         self.cfg = {key: self.get_parameter(key).value for key in DEFAULTS}
         self.validate_config()
@@ -183,13 +186,11 @@ class BaseSelector(Node):
         self.footprint = None
         self.joints = {}
         self.scan_seen = None
-        self.inflight_reach = None
         self.inflight_plan = None
         self.plan_pending = False
         self.selection_deadline = 0.0
         self.sequence = 0
         self.selected_context = None
-        self.reach = self.create_client(FindBaseCandidates, self.cfg['reachability_service'], callback_group=self.group)
         self.maps = [self.create_client(GetCostmap, self.cfg[key], callback_group=self.group)
                      for key in ('global_costmap_service', 'local_costmap_service')]
         self.planner = ActionClient(self, ComputePathToPose, self.cfg['planner_action'], callback_group=self.group)
@@ -215,7 +216,6 @@ class BaseSelector(Node):
         self.diagnostics_pub = self.create_publisher(String, '/base_selection/candidate_diagnostics', transient)
         self.create_timer(.5, self.expire)
         self.invalidate()
-        self.status('idle', 'Ready. Selection only; no motion commands are sent.')
 
     def validate_config(self):
         c = self.cfg
@@ -224,18 +224,13 @@ class BaseSelector(Node):
         for k, v in c.items():
             if isinstance(v, (int, float)) and not isinstance(v, bool) and (not math.isfinite(v) or v < 0):
                 raise ValueError(f'{k} must be finite and non-negative')
-        positive = ('time_budget', 'reachability_timeout', 'service_timeout', 'max_data_age', 'tf_timeout',
-                    'planning_budget', 'path_timeout', 'cancel_timeout', 'path_linear_step',
-                    'path_angular_step', 'length_scale', 'selection_ttl', 'max_verified_per_arm',
-                    'shortlist_size', 'max_path_checks')
+        positive = ('service_timeout', 'max_data_age', 'tf_timeout', 'path_timeout',
+                    'cancel_timeout', 'path_linear_step', 'path_angular_step',
+                    'length_scale', 'selection_ttl', 'max_path_checks')
         if any(c[k] <= 0 for k in positive):
             raise ValueError('Budgets, timeouts, counts, sampling steps and scales must be positive')
-        if c['time_budget'] > 60 or c['max_verified_per_arm'] > 1000:
-            raise ValueError('Reachability server supports <=60 s and <=1000 poses per arm')
-        if c['reachability_timeout'] <= c['time_budget']:
-            raise ValueError('reachability_timeout must exceed time_budget')
-        if c['max_path_checks'] < c['shortlist_size'] or c['max_path_checks'] > 2000:
-            raise ValueError('max_path_checks must be >= shortlist_size and <=2000')
+        if c['max_path_checks'] > 2000:
+            raise ValueError('max_path_checks must be <=2000')
         if not c['arm_joints'] or len(set(c['arm_joints'])) != len(c['arm_joints']):
             raise ValueError('arm_joints must be nonempty and unique')
         if not c['lifecycle_services']:
@@ -319,7 +314,7 @@ class BaseSelector(Node):
             self.stop.set()
             self.invalidate()
         res.success = True
-        res.message = 'Selection cancelled. An outstanding reachability call must finish before another query.'
+        res.message = 'Cancellation requested; outstanding Nav2 planning must terminate before another query.'
         return res
 
     def submit(self, target):
@@ -328,7 +323,7 @@ class BaseSelector(Node):
                 return False, 'Selector busy; cancel or wait. New target was NOT queued.'
             if self.plan_pending:
                 return False, 'Previous planner action is not terminal yet; wait for cancellation/completion.'
-            if any(f is not None and not f.done() for f in (self.inflight_reach, self.inflight_plan)):
+            if self.inflight_plan is not None and not self.inflight_plan.done():
                 return False, 'Previous server request still outstanding; wait for it to finish.'
             if not target.header.frame_id:
                 return False, 'Target requires header.frame_id'
@@ -463,35 +458,34 @@ class BaseSelector(Node):
         if any(abs(current[n]-q) > self.cfg['joint_motion_tolerance'] for n, q in joints.items()):
             raise SelectionError('Arm posture changed during selection; reselect')
 
-    def guard_target(self, requested, fixed):
-        current = self.transform_target(requested, self.cfg['fixed_frame'])
-        a, b = current.pose.position, fixed.pose.position
-        distance = math.sqrt((a.x-b.x)**2+(a.y-b.y)**2+(a.z-b.z)**2)
-        dot = abs(float(np.dot(quaternion(current.pose.orientation), quaternion(fixed.pose.orientation))))
-        rotation = 2*math.acos(min(1., dot))
-        if distance > self.cfg['target_drift_tolerance'] or rotation > self.cfg['target_rotation_drift_tolerance']:
-            raise SelectionError('Reachability frame drifted relative to target frame; reselect')
 
-    def costmaps(self):
+    def costmaps(self, deadline=None):
+        def timeout():
+            remaining = self.cfg['service_timeout']
+            if deadline is not None:
+                remaining = min(remaining, deadline-time.monotonic())
+                if remaining <= 0:
+                    raise CheckingBudgetExhausted('Selection budget exhausted while acquiring costmaps')
+            return remaining
         with self.lock:
             scan = self.scan_seen
         if scan is None or time.monotonic()-scan[1] > self.cfg['max_data_age']:
             raise SelectionError('Missing/stale scan stream')
         self.check_age(scan[0], 'scan')
         for client in self.lifecycle:
-            if not client.wait_for_service(timeout_sec=self.cfg['service_timeout']):
+            if not client.wait_for_service(timeout_sec=timeout()):
                 raise SelectionError(f'Unavailable lifecycle service: {client.srv_name}')
-            state = self.wait(client.call_async(GetState.Request()), self.cfg['service_timeout'])
+            state = self.wait(client.call_async(GetState.Request()), timeout())
             if state.current_state.id != 3:
                 raise SelectionError(f'Nav2 node is not active: {client.srv_name}')
         futures = []
         for client in self.maps:
-            if not client.wait_for_service(timeout_sec=self.cfg['service_timeout']):
+            if not client.wait_for_service(timeout_sec=timeout()):
                 raise SelectionError(f'Unavailable costmap service: {client.srv_name}')
             futures.append(client.call_async(GetCostmap.Request()))
         result = []
         for f in futures:
-            msg = self.wait(f, self.cfg['service_timeout']).map
+            msg = self.wait(f, timeout()).map
             self.check_age(msg.header.stamp, 'costmap')
             if stamp_seconds(msg.metadata.update_time) > 0:
                 self.check_age(msg.metadata.update_time, 'costmap update')
@@ -511,46 +505,6 @@ class BaseSelector(Node):
             costs.append(c.cost)
         return True, '', max(costs)
 
-    def candidates(self, response, current_joints):
-        arms = []
-        for arm in ('left', 'right'):
-            poses, solutions = getattr(response, arm+'_verified'), getattr(response, arm+'_solutions')
-            if len(poses.poses) != len(solutions):
-                raise SelectionError('Reachability pose/solution array length mismatch')
-            tf = self.tf_planar(self.cfg['fixed_frame'], poses.header.frame_id)
-            group = []
-            for p, solution in zip(poses.poses, solutions):
-                if not solution.name or len(solution.name) != len(solution.position) or \
-                        len(set(solution.name)) != len(solution.name):
-                    raise SelectionError('Invalid reachability joint solution')
-                if any(n not in current_joints for n in solution.name) or not np.isfinite(solution.position).all():
-                    raise SelectionError('Solution contains unknown joints or non-finite positions')
-                delta = np.mean([abs(q-current_joints[n]) for n, q in zip(solution.name, solution.position)])
-                group.append(Candidate(0, compose(tf, planar(p)), arm, [solution], float(delta/math.pi)))
-            arms.append(group)
-        mode = self.cfg['arm_mode']
-        if mode == 'both':
-            # Only virtually identical poses qualify; never merge neighbouring grid cells.
-            out = []
-            for l in arms[0]:
-                for r in arms[1]:
-                    if math.hypot(l.pose[0]-r.pose[0], l.pose[1]-r.pose[1]) < 1e-5 and \
-                            abs(angle(l.pose[2]-r.pose[2])) < 1e-5:
-                        out.append(Candidate(0, l.pose, 'both', l.solutions+r.solutions,
-                                             max(l.joint_cost, r.joint_cost)))
-                        break
-        else:
-            out = arms[0] if mode == 'left' else arms[1] if mode == 'right' else arms[0]+arms[1]
-        # Same base pose needs only one Nav2 query in either mode; retain lower joint travel.
-        unique = {}
-        for c in out:
-            key = (round(c.pose[0], 5), round(c.pose[1], 5), round(angle(c.pose[2]), 5))
-            if key not in unique or c.joint_cost < unique[key].joint_cost:
-                unique[key] = c
-        out = list(unique.values())
-        for i, c in enumerate(out):
-            c.id = i
-        return out
 
     def compute_path(self, candidate, start, deadline):
         goal = ComputePathToPose.Goal()
@@ -664,182 +618,8 @@ class BaseSelector(Node):
             costs.append(cost)
         return True, '', float(np.mean(costs))
 
-    def weights(self):
-        return [self.cfg['weight_'+k] for k in ('path_length', 'cost', 'heading', 'joint_motion')]
 
-    def report_candidate(self, candidate, candidates):
-        suffix = f'; {candidate.detail}' if candidate.detail else ''
-        self.get_logger().info(f'[candidate {candidate.id}] {candidate.state}{suffix}')
-        self.publish_candidate_diagnostics(candidates)
 
-    def run(self, target):
-        started = time.monotonic()
-        candidates = []
-        try:
-            self.status('checking', 'Checking TF, footprint, joint states and services')
-            frozen = self.transform_target(target, self.cfg['fixed_frame'])
-            with self.lock:
-                self.last_target = copy.deepcopy(frozen)
-            start = self.robot_pose()
-            joints = self.joint_snapshot()
-            self.footprint_snapshot()
-            if not self.reach.wait_for_service(timeout_sec=self.cfg['service_timeout']):
-                raise SelectionError('Reachability service unavailable')
-            if not self.planner.wait_for_server(timeout_sec=self.cfg['service_timeout']):
-                raise SelectionError('Nav2 planner action unavailable')
-            self.costmaps()
-            request = FindBaseCandidates.Request()
-            request.target = self.transform_target(frozen, self.cfg['reachability_frame'])
-            request.time_budget = self.cfg['time_budget']
-            request.max_verified_per_arm = self.cfg['max_verified_per_arm']
-            self.checkpoint()
-            self.status('reachability', f'Requesting verified poses: {request.time_budget:.1f} s, {request.max_verified_per_arm} per arm')
-            self.inflight_reach = self.reach.call_async(request)
-            # This service has no cancellation. Drain it even if the user cancels locally.
-            response = self.wait(self.inflight_reach, self.cfg['reachability_timeout'], cancellable=False)
-            self.checkpoint()
-            if not response.success:
-                raise SelectionError('Reachability failed: '+response.message)
-            self.guard_motion(start, joints)
-            self.guard_target(request.target, frozen)
-            candidates = self.candidates(response, joints)
-            if not candidates:
-                raise SelectionError('No verified candidates for arm_mode; service response may be truncated')
-            maps = self.costmaps()
-            footprint = self.footprint_snapshot()
-            survivors = []
-            for c in candidates:
-                self.checkpoint()
-                valid, reason, cost = self.polygon_check(transform_points(footprint, c.pose), maps)
-                c.state = 'destination_clear' if valid else reason
-                if valid:
-                    distance = math.hypot(c.pose[0]-start[0], c.pose[1]-start[1])
-                    c.preliminary = score(distance, cost, c.pose[2]-start[2], c.joint_cost,
-                                          self.weights(), self.cfg['length_scale'])
-                    survivors.append(c)
-            self.publish_markers(candidates)
-            if not survivors:
-                raise SelectionError('All returned candidates failed destination footprint checks')
-            ordered = diverse_order(survivors, self.cfg['diversity_distance'], self.cfg['diversity_angle'])
-            deadline = time.monotonic()+self.cfg['planning_budget']
-            feasible = []
-            checked = 0
-            for c in ordered[:self.cfg['max_path_checks']]:
-                if checked >= self.cfg['shortlist_size'] and feasible:
-                    break
-                if time.monotonic() >= deadline:
-                    break
-                self.guard_motion(start, joints)
-                self.status('planning', f'Checking candidate {checked+1}/{min(len(ordered), self.cfg["max_path_checks"])}',
-                            feasible=len(feasible), candidates=len(candidates))
-                plan_started = time.monotonic()
-                try:
-                    poses, reason = self.compute_path(c, start, deadline)
-                except Cancelled:
-                    raise
-                except Exception as e:
-                    c.state = 'planning_timeout_or_error'
-                    # Abort this batch rather than racing an unresolved Nav2 action.
-                    raise SelectionError(f'Planning interrupted: {e}') from e
-                checked += 1
-                plan_seconds = time.monotonic()-plan_started
-                if poses is None:
-                    c.state = reason
-                    self.report_candidate(c, candidates)
-                    continue
-                check_started = time.monotonic()
-                try:
-                    valid, reason, cost = self.check_path(poses, footprint, maps, deadline)
-                except CheckingBudgetExhausted:
-                    c.state = 'path_check_incomplete_budget'
-                    c.detail = f'Keeping {len(feasible)} fully checked candidates; partial check is not accepted'
-                    self.report_candidate(c, candidates)
-                    break
-                check_seconds = time.monotonic()-check_started
-                if not valid:
-                    c.state = 'path_'+reason
-                    c.detail = getattr(self, 'path_failure_detail', '')
-                    self.report_candidate(c, candidates)
-                    continue
-                c.path, c.length, c.cost = poses, path_length(poses), cost
-                c.score = score(c.length, cost, c.pose[2]-start[2], c.joint_cost,
-                                self.weights(), self.cfg['length_scale'])
-                c.state = 'path_checked'
-                c.detail = f'Nav2={plan_seconds:.3f}s; footprint={check_seconds:.3f}s; poses={len(poses)}'
-                self.report_candidate(c, candidates)
-                feasible.append(c)
-                # First shortlist is evaluated fully; expand only if none passed.
-                if checked >= self.cfg['shortlist_size'] and feasible:
-                    break
-            if not feasible:
-                if checked >= len(ordered):
-                    stop_reason = 'all destination-clear candidates examined'
-                elif checked >= self.cfg['max_path_checks']:
-                    stop_reason = 'max_path_checks reached'
-                else:
-                    stop_reason = 'planning time budget reached'
-                counts = Counter(c.state for c in candidates)
-                summary = ', '.join(f'{state}={count}' for state, count in sorted(counts.items()))
-                raise SelectionError(f'No path-checked candidate: {stop_reason}; '
-                                     f'completed_checks={checked}; {summary}')
-            self.status('revalidating', 'Refreshing costmaps and checking finalists')
-            self.guard_motion(start, joints)
-            maps = self.costmaps()
-            footprint = self.footprint_snapshot()
-            fresh_at = time.monotonic()
-            chosen = None
-            for c in sorted(feasible, key=lambda c: c.score):
-                valid, reason, cost = self.check_path(c.path, footprint, maps,
-                                                     time.monotonic()+self.cfg['planning_budget'])
-                if valid:
-                    c.cost = cost
-                    c.score = score(c.length, cost, c.pose[2]-start[2], c.joint_cost,
-                                    self.weights(), self.cfg['length_scale'])
-                    chosen = c
-                    break
-                c.state = 'revalidation_'+reason
-            if chosen is None:
-                raise SelectionError('Finalists became invalid on fresh costmaps; reselect')
-            if time.monotonic()-fresh_at > self.cfg['max_data_age']:
-                raise SelectionError('Final costmap snapshot aged out during checking; reselect')
-            self.guard_motion(start, joints)
-            self.guard_target(request.target, frozen)
-            chosen.state = 'selected'
-            now = self.get_clock().now().to_msg()
-            pose = pose_msg(chosen.pose, self.cfg['fixed_frame'])
-            pose.header.stamp = now
-            path = Path()
-            path.header = copy.deepcopy(pose.header)
-            path.poses = [pose_msg(p, self.cfg['fixed_frame']) for p in chosen.path]
-            result = {'request_id': self.sequence, 'valid': True, 'frame_id': self.cfg['fixed_frame'],
-                      'arm': chosen.arm, 'pose': list(chosen.pose), 'score': chosen.score,
-                      'path_length_m': chosen.length, 'path_cost': chosen.cost,
-                      'joint_motion_score': chosen.joint_cost, 'cache_id': response.cache_id,
-                      'reachability_budget_exhausted': response.budget_exhausted,
-                      'reachability_search_truncated': response.search_truncated,
-                      'returned_left': len(response.left_verified.poses), 'returned_right': len(response.right_verified.poses),
-                      'path_checks': checked, 'feasible_paths': len(feasible),
-                      'elapsed_seconds': time.monotonic()-started, 'valid_for_seconds': self.cfg['selection_ttl'],
-                      'environment_arm_collision_checked': False, 'combined_arm_collision_checked': False,
-                      'joint_solutions': [{'names': list(s.name), 'positions': list(s.position)} for s in chosen.solutions]}
-            with self.lock:
-                self.checkpoint()
-                self.selection_deadline = time.monotonic()+self.cfg['selection_ttl']
-                self.selected_context = (start, joints)
-                self.result_pub.publish(String(data=json.dumps(result, allow_nan=False)))
-                self.path_pub.publish(path)
-                self.pose_pub.publish(pose)
-                self.valid_pub.publish(Bool(data=True))
-                self.publish_markers(candidates)
-                self.status('selected', f'{chosen.arm}: {chosen.length:.2f} m path, score {chosen.score:.3f}', **result)
-        except Exception as e:
-            if rclpy.ok():
-                self.invalidate()
-                self.publish_markers(candidates)
-                self.status('cancelled' if isinstance(e, Cancelled) else 'failed', str(e))
-        finally:
-            with self.lock:
-                self.busy = False
 
     def publish_candidate_diagnostics(self, candidates):
         data = [{'id': c.id, 'arm': c.arm, 'pose': list(c.pose), 'state': c.state,
@@ -869,24 +649,3 @@ class BaseSelector(Node):
         self.markers_pub.publish(MarkerArray(markers=markers))
 
 
-def main(args=None):
-    rclpy.init(args=args)
-    node = BaseSelector()
-    # Work is already on a separate worker thread. Keep message/future dispatch
-    # single-threaded; the independent TF executor stays responsive throughout.
-    executor = SingleThreadedExecutor()
-    executor.add_node(node)
-    try:
-        executor.spin()
-    except KeyboardInterrupt:
-        pass
-    finally:
-        node.stop.set()
-        # Shutdown wakes worker waits; leave node alive until its worker has stopped.
-        if rclpy.ok():
-            rclpy.shutdown()
-        if node.worker:
-            node.worker.join(timeout=5.0)
-        executor.shutdown(timeout_sec=2.0)
-        node.tf_receiver.close()
-        node.destroy_node()

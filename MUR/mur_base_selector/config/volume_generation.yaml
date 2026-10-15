@@ -1,0 +1,19 @@
+# Offline only. Workspace coordinates are relative to base_link, in metres.
+volume_file: ~/ros2_ws/src/MUR/mur_base_selector/config/dexterous_volume.npz
+bounds_min: [-1.0, -1.1, 0.3]
+bounds_max: [1.1, 1.1, 1.6]
+voxel_size: 0.10
+# Position bearing around base +X; applied before performing any offline IK.
+workspace_fov_deg: 250.0
+workspace_front_offset_deg: 0.0
+# Full TCP orientation lattice, including roll. Coarse foundation; refine later.
+orientation_step_deg: 45.0
+# Tool direction is TCP +X. 70 deg minimum separation from horizontal ray TCP -> base centre.
+# This is independent of workspace FOV. Increase to exclude more inward poses.
+tool_axis: [1.0, 0.0, 0.0]
+min_inward_angle_deg: 70.0
+# Horizontal keeps downward tools eligible. spatial uses the 3D base-origin ray.
+inward_reference: horizontal
+ik_timeout: 0.01
+attempts: 3
+save_every_voxels: 10

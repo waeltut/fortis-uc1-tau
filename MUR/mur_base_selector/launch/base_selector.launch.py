@@ -7,7 +7,7 @@ from launch_ros.actions import Node
 
 
 def generate_launch_description():
-    config = os.path.join(get_package_share_directory('mur_base_selector'), 'config', 'base_selector.yaml')
+    config = os.path.join(get_package_share_directory('mur_base_selector'), 'config', 'volume_selector.yaml')
     return LaunchDescription([
         DeclareLaunchArgument('selector_config', default_value=config),
         DeclareLaunchArgument('arm_mode', default_value='either'),

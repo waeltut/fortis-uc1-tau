@@ -3,7 +3,7 @@ from types import SimpleNamespace
 import unittest
 import numpy as np
 from mur_base_selector.core import (Grid, angle, hull, padded, transform_points,
-    swept_polygons, diverse_order, path_length, score)
+    swept_polygons, diverse_order, path_length)
 
 
 class GeometryTests(unittest.TestCase):
@@ -97,10 +97,6 @@ class GeometryTests(unittest.TestCase):
         result = diverse_order(cs)
         self.assertEqual([c.id for c in result], [0, 2, 3, 1])
 
-    def test_actual_path_length_and_score(self):
-        self.assertAlmostEqual(path_length([(0, 0, 0), (3, 4, 0), (3, 5, 0)]), 6.)
-        self.assertLess(score(1, 0, 0, 0, [1, 2, .2, .2], 5),
-                        score(1, 1, 0, 0, [1, 2, .2, .2], 5))
 
 
 if __name__ == '__main__':

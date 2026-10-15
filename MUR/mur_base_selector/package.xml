@@ -1,8 +1,8 @@
 <?xml version="1.0"?>
 <package format="3">
   <name>mur_base_selector</name>
-  <version>0.1.5</version>
-  <description>Service-driven selection of reachable manipulation base poses using Nav2 costmaps and paths.</description>
+  <version>0.5.1</version>
+  <description>Sampled workspace volume selection with an offline MoveIt builder and Nav2 validation.</description>
   <maintainer email="maintainers@example.com">MUR maintainers</maintainer>
   <license>Apache-2.0</license>
   <buildtool_depend>ament_python</buildtool_depend>
@@ -20,6 +20,7 @@
   <exec_depend>visualization_msgs</exec_depend>
   <exec_depend>mur_reachability</exec_depend>
   <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
   <exec_depend>ament_index_python</exec_depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
