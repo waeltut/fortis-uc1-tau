@@ -234,7 +234,7 @@ local_costmap:
           max_obstacle_height: 2.0
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        inflation_radius: 0.65
+        inflation_radius: 0.7
         cost_scaling_factor: 5.0
       always_send_full_costmap: True
       transform_tolerance: 0.2
@@ -275,7 +275,7 @@ global_costmap:
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         enabled: true
-        inflation_radius: 0.65
+        inflation_radius: 0.7
         cost_scaling_factor: 5.0
       audio_layer:
         plugin: "adaptive_layers::AudioLayer"
