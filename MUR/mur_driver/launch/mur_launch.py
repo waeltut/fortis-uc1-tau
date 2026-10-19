@@ -11,7 +11,7 @@ import sys
 # Each entry: (package, launch filename, launch arguments).
 NAV2_LAUNCH = ("slam_config", "nav2_launch.py", {})
 EXTRA_LAUNCHES = [
-#    ("mur_base_selector", "base_selector.launch.py", {}),
+    ("mur_base_selector", "base_selector.launch.py", {}),
 ]
 
 REQUIRED_TF = [("odom", "base_link"), ("base_link", "mur"),
