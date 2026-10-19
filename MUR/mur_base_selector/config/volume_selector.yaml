@@ -50,7 +50,7 @@ mur_base_selector:
     selection_ttl: 15.0
     publish_visualization_data: true
     visualization_max_candidates: 6000
-    selection_budget: 12.0
+    selection_budget: 30.0
     final_validation_reserve: 2.0
     ranking_pool_size: 160
     max_destination_checks: 80
