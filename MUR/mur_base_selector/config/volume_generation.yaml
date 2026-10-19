@@ -6,7 +6,7 @@ voxel_size: 0.10
 # Position bearing around base +X; applied before performing any offline IK.
 workspace_fov_deg: 250.0
 workspace_front_offset_deg: 0.0
-# Full TCP orientation lattice, including roll. Coarse foundation; refine later.
+# Full TCP orientation lattice, including roll. Smaller steps increase offline work and angular resolution.
 orientation_step_deg: 45.0
 # Tool direction is TCP +X. 70 deg minimum separation from horizontal ray TCP -> base centre.
 # This is independent of workspace FOV. Increase to exclude more inward poses.

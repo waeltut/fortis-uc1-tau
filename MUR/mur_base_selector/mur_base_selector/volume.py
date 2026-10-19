@@ -1,7 +1,7 @@
 """ROS-free sampled orientation volumes and shared 2-D travel-cost field.
 
 A positive entry is evidence at a sampled pose, not a continuous IK certificate.
-No online IK, cached joint seeds, or legacy sample-cache dependency.
+Orientation evidence is loaded from the offline cache; queries perform no IK.
 """
 import heapq
 import json
@@ -93,8 +93,31 @@ class Volume:
         self.allowed=np.array([allowed_orientations(p,self.quats,cfg['tool_axis'],cfg['min_inward_angle_deg'],cfg.get('inward_reference','horizontal')) for p in self.points])
         if (self.masks & ~self.allowed[None,:,:]).any():raise ValueError('Cache has disallowed orientation entries')
         self.coverage=self.masks.sum(axis=-1)/np.maximum(1,self.allowed.sum(axis=-1))[None,:]
+        base=float(cfg['min_inward_angle_deg'])
+        self.profile_cache={base:{'angle':base,'allowed':self.allowed,'coverage':self.coverage,'counts':self.allowed.sum(axis=-1)}}
+        self.profile_angles=[base]
 
-    def query(self,target,base_z,yaw_bins,min_coverage,max_height_error,max_angle_deg,fov_deg,front_offset_deg,mode,checkpoint=lambda:None):
+    def profile(self,angle_deg):
+        cfg=self.meta['generation'];base=float(cfg['min_inward_angle_deg']);value=float(angle_deg)
+        if not math.isfinite(value) or not base<=value<180:
+            raise ValueError(f'Profile angle must be >= cached {base:g} and <180 degrees')
+        if value not in self.profile_cache:
+            allowed=np.array([allowed_orientations(p,self.quats,cfg['tool_axis'],value,cfg.get('inward_reference','horizontal')) for p in self.points])
+            # Never infer untested orientations, even with floating-point boundary effects.
+            allowed &= self.allowed
+            counts=allowed.sum(axis=-1)
+            coverage=(self.masks & allowed[None,:,:]).sum(axis=-1)/np.maximum(1,counts)[None,:]
+            self.profile_cache[value]={'angle':value,'allowed':allowed,'coverage':coverage,'counts':counts}
+        return self.profile_cache[value]
+
+    def configure_profiles(self,angles):
+        if not angles:raise ValueError('At least one orientation profile is required')
+        values=sorted(set([float(self.meta['generation']['min_inward_angle_deg'])]+[float(a) for a in angles]))
+        for a in values:self.profile(a)
+        self.profile_angles=values
+
+
+    def query(self,target,base_z,yaw_bins,min_coverage,max_height_error,max_angle_deg,fov_deg,front_offset_deg,mode,checkpoint=lambda:None,include_profiles=False):
         cfg=self.meta['generation']
         # A larger online FOV cannot recover voxels omitted at generation.
         if fov_deg>cfg['workspace_fov_deg']+1e-9 or abs(angle(math.radians(front_offset_deg-cfg['workspace_front_offset_deg'])))>1e-9:
@@ -120,16 +143,37 @@ class Volume:
             if cfg.get('inward_reference','horizontal')=='horizontal':inward[:,2]=0.
             norms=np.linalg.norm(inward,axis=1)
             good &= (norms>1e-9)
-            good &= np.sum((-inward/np.maximum(norms[:,None],1e-12))*dirs,axis=1)<=math.cos(math.radians(cfg['min_inward_angle_deg']))+1e-12
-            valid=self.masks[:,height,oi] & (self.coverage[:,height]>=min_coverage) & good[None,:]
+            inward_dot=np.sum((-inward/np.maximum(norms[:,None],1e-12))*dirs,axis=1)
+            valid=np.zeros((2,len(height)),dtype=bool)
+            selected_angles=np.zeros((2,len(height)),dtype=float)
+            selected_coverage=np.zeros((2,len(height)),dtype=float)
+            selected_counts=np.zeros((2,len(height)),dtype=int)
+            # Broadest passing profile wins, but acceptance is the union of all profiles.
+            for profile_angle in self.profile_angles:
+                profile=self.profile_cache[profile_angle]
+                direction_ok=inward_dot<=math.cos(math.radians(profile_angle))+1e-12
+                sampled_ok=profile['allowed'][height,oi] & (profile['counts'][height]>0)
+                eligible=(self.masks[:,height,oi] & self.done[:,height] &
+                          (profile['coverage'][:,height]>=min_coverage) &
+                          (good & direction_ok & sampled_ok)[None,:])
+                take=eligible & ~valid
+                selected_angles[take]=profile_angle
+                selected_coverage[take]=profile['coverage'][:,height][take]
+                selected_counts[take]=np.broadcast_to(profile['counts'][height],take.shape)[take]
+                valid |= eligible
             cs,sn=math.cos(yaw),math.sin(yaw)
             bx=p[0]-(cs*points[:,0]-sn*points[:,1]);by=p[1]-(sn*points[:,0]+cs*points[:,1])
             for j,idx in enumerate(height):
                 arms=['both'] if mode=='both' and valid[:,j].all() else []
                 if mode!='both':arms=[name for a,name in enumerate(('left','right')) if valid[a,j] and mode in ('either',name)]
                 for arm in arms:
-                    coverage=float(self.coverage[:,idx].min() if arm=='both' else self.coverage[int(arm=='right'),idx])
-                    rows.append(((float(bx[j]),float(by[j]),yaw),arm,float(bearings[j]),coverage,float(abs(points[j,2]-(p[2]-base_z))),error))
+                    arm_ids=(0,1) if arm=='both' else (int(arm=='right'),)
+                    coverage=float(min(selected_coverage[a,j] for a in arm_ids))
+                    row=((float(bx[j]),float(by[j]),yaw),arm,float(bearings[j]),coverage,float(abs(points[j,2]-(p[2]-base_z))),error)
+                    if include_profiles:
+                        evidence={('left','right')[a]:{'min_inward_angle_deg':float(selected_angles[a,j]),'coverage':float(selected_coverage[a,j]),'allowed_samples':int(selected_counts[a,j])} for a in arm_ids}
+                        row+=(evidence,)
+                    rows.append(row)
         return rows
 
 

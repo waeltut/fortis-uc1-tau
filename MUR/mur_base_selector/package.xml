@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <package format="3">
   <name>mur_base_selector</name>
-  <version>0.5.1</version>
+  <version>0.5.4</version>
   <description>Sampled workspace volume selection with an offline MoveIt builder and Nav2 validation.</description>
   <maintainer email="maintainers@example.com">MUR maintainers</maintainer>
   <license>Apache-2.0</license>

@@ -33,7 +33,7 @@ mur_base_selector:
     tf_timeout: 0.5
     footprint_padding: 0.02
     allow_unknown: false
-    max_path_checks: 20
+    max_path_checks: 8
     path_timeout: 1.0
     cancel_timeout: 2.0
     diversity_distance: 0.2
@@ -48,16 +48,19 @@ mur_base_selector:
     joint_motion_tolerance: 0.04
     length_scale: 5.0
     selection_ttl: 15.0
-    selection_budget: 20.0
+    publish_visualization_data: true
+    visualization_max_candidates: 6000
+    selection_budget: 12.0
     final_validation_reserve: 2.0
     ranking_pool_size: 160
     max_destination_checks: 80
-    target_feasible_paths: 10
+    target_feasible_paths: 3
     front_fov_deg: 250.0
     front_yaw_offset_deg: 0.0
     volume_file: ~/ros2_ws/src/MUR/mur_base_selector/config/dexterous_volume.npz
     travel_field_budget: 2.0
     yaw_bins: 24
+    orientation_profiles_deg: [70.0, 90.0, 120.0]
     minimum_orientation_coverage: 0.9
     max_height_error: 0.05
     max_orientation_error_deg: 30.0
