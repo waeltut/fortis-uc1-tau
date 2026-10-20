@@ -15,6 +15,7 @@ def generate_launch_description():
 
     reference_frame = LaunchConfiguration("reference_frame")
     execute = LaunchConfiguration("execute")
+    headless_mode = LaunchConfiguration("headless_mode")
 
     left_group = LaunchConfiguration("left_group")
     right_group = LaunchConfiguration("right_group")
@@ -40,6 +41,11 @@ def generate_launch_description():
                 "execute",
                 default_value="true",
                 description="If true, MoveIt executes planned trajectories",
+            ),
+            DeclareLaunchArgument(
+                "headless_mode",
+                default_value="false",
+                description="Run UR External Control directly in Remote Control mode without pressing pendant Play",
             ),
             DeclareLaunchArgument(
                 "left_group",
@@ -98,9 +104,23 @@ def generate_launch_description():
                             "duo_ur_real.launch.py",
                         ]
                     )
-                )
+                ),
+                launch_arguments={"headless_mode": headless_mode}.items(),
             ),
 
+            # Apply configured mass, CoG and optional inertia once each UR program runs.
+            # Requires both /<side>_io_and_status_controller/set_payload services.
+            Node(
+                package="dual_arm_driver",
+                executable="payload_initializer",
+                name="payload_initializer",
+                output="screen",
+                parameters=[
+                    PathJoinSubstitution(
+                        [FindPackageShare("dual_arm_driver"), "config", "payload.yaml"]
+                    )
+                ],
+            ),
             Node(
                 package="hand_control",
                 executable="hand_control",

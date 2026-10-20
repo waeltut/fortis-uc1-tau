@@ -36,8 +36,9 @@ from launch_ros.parameter_descriptions import ParameterFile, ParameterValue
 from launch_ros.substitutions import FindPackageShare
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, OpaqueFunction
+from launch.actions import DeclareLaunchArgument, OpaqueFunction, RegisterEventHandler, LogInfo
 from launch.conditions import IfCondition, UnlessCondition
+from launch.event_handlers import OnProcessExit
 from launch.substitutions import (
     AndSubstitution,
     Command,
@@ -78,8 +79,6 @@ def launch_setup(context, *args, **kwargs):
     use_fake_hardware = LaunchConfiguration("use_fake_hardware")
     fake_sensor_commands = LaunchConfiguration("fake_sensor_commands")
     controller_spawner_timeout = LaunchConfiguration("controller_spawner_timeout")
-    initial_joint_controller = LaunchConfiguration("initial_joint_controller")
-    activate_joint_controller = LaunchConfiguration("activate_joint_controller")
     launch_rviz = LaunchConfiguration("launch_rviz")
     headless_mode = LaunchConfiguration("headless_mode")
     launch_dashboard_client = LaunchConfiguration("launch_dashboard_client")
@@ -375,6 +374,7 @@ def launch_setup(context, *args, **kwargs):
     urscript_interface_1 = Node(
         package="ur_robot_driver",
         executable="urscript_interface",
+        name="right_urscript_interface",
         parameters=[{"robot_ip": robot_ip_1}],
         output="screen",
     )
@@ -382,63 +382,65 @@ def launch_setup(context, *args, **kwargs):
     urscript_interface_2 = Node(
         package="ur_robot_driver",
         executable="urscript_interface",
+        name="left_urscript_interface",
         parameters=[{"robot_ip": robot_ip_2}],
         output="screen",
     )
 
-    controller_stopper_node_1 = Node(
-        package="ur_robot_driver",
-        executable="controller_stopper_node",
-        name="left_controller_stopper",
-        output="screen",
-        emulate_tty=True,
-        condition=UnlessCondition(use_fake_hardware),
-        parameters=[
-            {"headless_mode": headless_mode},
-            {"joint_controller_active": activate_joint_controller},
-            {
-                "consistent_controllers": [
-                    "left_io_and_status_controller",
-                    "left_force_torque_sensor_broadcaster",
-                    "joint_state_broadcaster",
-                    "left_speed_scaling_state_broadcaster",
-                    "left_tcp_pose_broadcaster",
-                    "left_ur_configuration_controller",
-                    "left_cartesian_compliance_controller",
-                    "left_cartesian_force_controller",
-                    "left_cartesian_motion_controller",
-                    "left_motion_control_handle",
-                ]
-            },
-        ],
+    # One ros2_control manager serves BOTH UR arms. A stopper must never
+    # deactivate the other arm's motion controllers.
+    shared_controllers = [
+        "joint_state_broadcaster",
+        *[f"{arm}_{suffix}" for arm in ("left", "right") for suffix in (
+            "io_and_status_controller",
+            "speed_scaling_state_broadcaster",
+            "force_torque_sensor_broadcaster",
+            "tcp_pose_broadcaster",
+            "ur_configuration_controller",
+        )],
+    ]
+    motion_suffixes = (
+        "joint_trajectory_controller",
+        "scaled_joint_trajectory_controller",
+        "forward_velocity_controller",
+        "forward_position_controller",
+        "force_mode_controller",
+        "passthrough_trajectory_controller",
+        "freedrive_mode_controller",
+        "tool_contact_controller",
+        "cartesian_compliance_controller",
+        "cartesian_force_controller",
+        "cartesian_motion_controller",
+        "motion_control_handle",
     )
 
-    controller_stopper_node_2 = Node(
-        package="ur_robot_driver",
-        executable="controller_stopper_node",
-        name="right_controller_stopper",
-        output="screen",
-        emulate_tty=True,
-        condition=UnlessCondition(use_fake_hardware),
-        parameters=[
-            {"headless_mode": headless_mode},
-            {"joint_controller_active": activate_joint_controller},
-            {
-                "consistent_controllers": [
-                    "right_io_and_status_controller",
-                    "right_force_torque_sensor_broadcaster",
-                    "joint_state_broadcaster",
-                    "right_speed_scaling_state_broadcaster",
-                    "right_tcp_pose_broadcaster",
-                    "right_ur_configuration_controller",
-                    "right_cartesian_compliance_controller",
-                    "right_cartesian_force_controller",
-                    "right_cartesian_motion_controller",
-                    "right_motion_control_handle",
-                ]
-            },
-        ],
-    )
+    def controller_stopper(arm):
+        opposite = "right" if arm == "left" else "left"
+        return Node(
+            package="ur_robot_driver",
+            executable="controller_stopper_node",
+            name=f"{arm}_controller_stopper",
+            output="screen",
+            emulate_tty=True,
+            condition=UnlessCondition(use_fake_hardware),
+            parameters=[
+                {"headless_mode": headless_mode},
+                # Intentionally deactivate the local trajectory controller until
+                # External Control reports running. The bundled driver QoS patch
+                # replays the latest program-running status after startup.
+                {"joint_controller_active": True},
+                {"consistent_controllers": shared_controllers + [
+                    f"{opposite}_{suffix}" for suffix in motion_suffixes
+                ]},
+            ],
+            remappings=[(
+                "io_and_status_controller/robot_program_running",
+                f"/{arm}_io_and_status_controller/robot_program_running",
+            )],
+        )
+
+    controller_stopper_node_1 = controller_stopper("left")
+    controller_stopper_node_2 = controller_stopper("right")
 
     robot_state_publisher_node = Node(
         package="robot_state_publisher",
@@ -447,8 +449,7 @@ def launch_setup(context, *args, **kwargs):
         parameters=[robot_description],
     )
 
-    def controller_spawner(controllers, active=True):
-        inactive_flags = ["--inactive"] if not active else []
+    def controller_spawner(controllers):
         return Node(
             package="controller_manager",
             executable="spawner",
@@ -458,68 +459,41 @@ def launch_setup(context, *args, **kwargs):
                 "--controller-manager-timeout",
                 controller_spawner_timeout,
             ]
-            + inactive_flags
             + controllers,
         )
 
+    # Start only one position-command controller per arm. MoveIt is configured
+    # for these scaled controllers in moveit_controllers.yaml.
     controllers_active = [
         "joint_state_broadcaster",
-        "left_io_and_status_controller",
-        "left_speed_scaling_state_broadcaster",
-        "left_force_torque_sensor_broadcaster",
-        "left_tcp_pose_broadcaster",
-        "left_ur_configuration_controller",
-        "left_joint_trajectory_controller",
-        "right_io_and_status_controller",
-        "right_speed_scaling_state_broadcaster",
-        "right_force_torque_sensor_broadcaster",
-        "right_tcp_pose_broadcaster",
-        "right_ur_configuration_controller",
-        "right_joint_trajectory_controller",
+        *[f"{arm}_{suffix}" for arm in ("left", "right") for suffix in (
+            "io_and_status_controller",
+            "speed_scaling_state_broadcaster",
+            "force_torque_sensor_broadcaster",
+            "tcp_pose_broadcaster",
+            "ur_configuration_controller",
+            "scaled_joint_trajectory_controller",
+        )],
     ]
-    controllers_inactive = [
-        "left_scaled_joint_trajectory_controller",
-        "left_forward_velocity_controller",
-        "left_forward_position_controller",
-        "left_force_mode_controller",
-        "left_passthrough_trajectory_controller",
-        "left_freedrive_mode_controller",
-        "left_tool_contact_controller",
-        "left_cartesian_compliance_controller",
-        "left_cartesian_force_controller",
-        "left_cartesian_motion_controller",
-        "left_motion_control_handle",
-        "right_scaled_joint_trajectory_controller",
-        "right_forward_velocity_controller",
-        "right_forward_position_controller",
-        "right_force_mode_controller",
-        "right_passthrough_trajectory_controller",
-        "right_freedrive_mode_controller",
-        "right_tool_contact_controller",
-        "right_cartesian_compliance_controller",
-        "right_cartesian_force_controller",
-        "right_cartesian_motion_controller",
-        "right_motion_control_handle",
-    ]
-    if activate_joint_controller.perform(context) == "true":
-        selected_controller = initial_joint_controller.perform(context)
-        if selected_controller not in controllers_active:
-            # Replace the active trajectory controller for this arm only.
-            arm_prefix = selected_controller.split("_", 1)[0]
-            default_controller = arm_prefix + "_joint_trajectory_controller"
-            controllers_active.remove(default_controller)
-            controllers_inactive.append(default_controller)
-            controllers_inactive.remove(selected_controller)
-            controllers_active.append(selected_controller)
+    if use_fake_hardware.perform(context).lower() == "true":
+        for arm in ("left", "right"):
+            controllers_active.remove(f"{arm}_tcp_pose_broadcaster")
 
-    if use_fake_hardware.perform(context) == "true":
-        controllers_active.remove("left_tcp_pose_broadcaster")
-        controllers_active.remove("right_tcp_pose_broadcaster")
+    # Start the stoppers only after both scaled controllers are spawned active.
+    # Stoppers intentionally park them until External Control is running.
+    active_spawner = controller_spawner(controllers_active)
 
-    controller_spawners = [
-        controller_spawner(controllers_active),
-        controller_spawner(controllers_inactive, active=False),
-    ]
+    # Register the event handler BEFORE launching the spawner. Starting the
+    # handler after the spawner creates a possible missed-exit-event race.
+    # Only start the stoppers after the active spawner exits successfully.
+    def on_active_spawner_exit(event, context):
+        if event.returncode != 0:
+            return [LogInfo(msg="Active controller spawner failed; controller stoppers were not started.")]
+        return [controller_stopper_node_1, controller_stopper_node_2]
+
+    start_stoppers_after_active_spawner = RegisterEventHandler(
+        OnProcessExit(target_action=active_spawner, on_exit=on_active_spawner_exit)
+    )
 
     robot_description_file = os.path.join(
         get_package_share_directory("duo_ur"), "urdf", "duo_ur_onehand.urdf.xacro"
@@ -574,14 +548,12 @@ def launch_setup(context, *args, **kwargs):
             ur_control_node,
             dashboard_client_node_1,
             tool_communication_node,
-            controller_stopper_node_1,
             urscript_interface_1,
             dashboard_client_node_2,
-            controller_stopper_node_2,
             urscript_interface_2,
             robot_state_publisher_node,
         ]
-        + controller_spawners
+        + [start_stoppers_after_active_spawner, active_spawner]
         + [
             move_group_node,
             rviz_node,
@@ -731,34 +703,6 @@ def generate_launch_description():
             "controller_spawner_timeout",
             default_value="10",
             description="Timeout used when spawning controllers.",
-        )
-    )
-    declared_arguments.append(
-        DeclareLaunchArgument(
-            "initial_joint_controller",
-            default_value="left_joint_trajectory_controller",
-            choices=[
-                "left_scaled_joint_trajectory_controller",
-                "left_joint_trajectory_controller",
-                "left_forward_velocity_controller",
-                "left_forward_position_controller",
-                "left_freedrive_mode_controller",
-                "left_passthrough_trajectory_controller",
-                "right_scaled_joint_trajectory_controller",
-                "right_joint_trajectory_controller",
-                "right_forward_velocity_controller",
-                "right_forward_position_controller",
-                "right_freedrive_mode_controller",
-                "right_passthrough_trajectory_controller",
-            ],
-            description="Initially loaded robot controller.",
-        )
-    )
-    declared_arguments.append(
-        DeclareLaunchArgument(
-            "activate_joint_controller",
-            default_value="false",
-            description="Activate loaded joint controller.",
         )
     )
     declared_arguments.append(

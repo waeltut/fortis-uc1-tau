@@ -49,13 +49,6 @@
 ControllerStopper::ControllerStopper(const rclcpp::Node::SharedPtr& node, bool stop_controllers_on_startup)
   : node_(node), stop_controllers_on_startup_(stop_controllers_on_startup), robot_running_(true)
 {
-  // Subscribes to a robot's running state topic. Ideally this topic is latched and only publishes
-  // on changes. However, this node only reacts on state changes, so a state published each cycle
-  // would also be fine.
-  robot_running_sub_ = node->create_subscription<std_msgs::msg::Bool>(
-      "io_and_status_controller/robot_program_running", 1,
-      std::bind(&ControllerStopper::robotRunningCallback, this, std::placeholders::_1));
-
   // Controller manager service to switch controllers
   controller_manager_srv_ = node_->create_client<controller_manager_msgs::srv::SwitchController>("controller_manager/"
                                                                                                  "switch_controller");
@@ -103,6 +96,17 @@ ControllerStopper::ControllerStopper(const rclcpp::Node::SharedPtr& node, bool s
     }
     robot_running_ = false;
   }
+
+  // The GPIOController publishes this status with TRANSIENT_LOCAL durability
+  // only when it changes. Subscribe after our startup controller switch so
+  // the retained state is replayed after the constructor has finished, even
+  // when the robot program was already running before we started.
+  // A VOLATILE subscription can miss an earlier 'true' sample and leave the
+  // scaled trajectory controller inactive indefinitely.
+  auto program_qos = rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local();
+  robot_running_sub_ = node_->create_subscription<std_msgs::msg::Bool>(
+      "io_and_status_controller/robot_program_running", program_qos,
+      std::bind(&ControllerStopper::robotRunningCallback, this, std::placeholders::_1));
 }
 
 void ControllerStopper::findAndStopControllers()

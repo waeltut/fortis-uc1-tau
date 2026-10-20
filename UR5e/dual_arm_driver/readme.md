@@ -11,7 +11,7 @@ ros2 topic pub --once /left_arm/goal_pose geometry_msgs/msg/PoseStamped "{
   pose: {
     position: {
       x: 0.7,
-      y: 0.25,
+      y: 0.30,
       z: 1.0
     },
     orientation: {
@@ -29,11 +29,11 @@ ros2 topic pub --once /right_arm/goal_pose geometry_msgs/msg/PoseStamped "{
   pose: {
     position: {
       x: 0.7,
-      y: -0.25,
+      y: -0.30,
       z: 1.0
     },
     orientation: {
-      x: -0.5,
+      x: 0,
       y: 0,
       z: 0,
       w: 1.0

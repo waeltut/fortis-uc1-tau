@@ -1,0 +1,21 @@
+# Default payloads for both real UR5e arms.
+# Mass: kg; CoG: m from the TOOL MOUNTING FLANGE (not left_tcp/right_tcp).
+# IMPORTANT: CoG [0,0,0] is a PLACEHOLDER; measure the actual attached tool CoG.
+# Inertias: kg*m^2 about the CoG. Zeros use the UR controller's default approximation.
+# Setting a payload changes the physical robot's gravity compensation.
+
+payload_initializer:
+  ros__parameters:
+    left:
+      enabled: true
+      mass: 1.0
+      cog: [0.0, 0.0, 0.0]       # REPLACE with measured CoG
+      inertia: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]  # Ixx, Iyy, Izz, Ixy, Ixz, Iyz
+    right:
+      enabled: true
+      mass: 1.0
+      cog: [0.0, 0.0, 0.0]       # REPLACE with measured CoG
+      inertia: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    transition_time: 0.0         # seconds; apply when robot is stationary
+    startup_delay: 1.0          # seconds after External Control reports running
+    retry_interval: 5.0         # seconds if service unavailable or returns failure
