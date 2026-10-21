@@ -185,3 +185,10 @@ right_ur_manipulator:
     - SPARSkConfigDefault
     - SPARStwokConfigDefault
     - TrajOptDefault
+
+# Combined 12-joint SRDF group already defined in duo_ur_onehand.srdf.
+# Separate 6-DOF IK is solved for each arm; OMPL then plans the combined joint space.
+both_ur_manipulator:
+  default_planner_config: RRTConnectkConfigDefault
+  planner_configs:
+    - RRTConnectkConfigDefault

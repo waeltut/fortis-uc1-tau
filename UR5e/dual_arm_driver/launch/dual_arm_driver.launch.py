@@ -3,6 +3,7 @@ from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 from moveit_configs_utils import MoveItConfigsBuilder
 
 from launch.actions import IncludeLaunchDescription
@@ -19,6 +20,9 @@ def generate_launch_description():
 
     left_group = LaunchConfiguration("left_group")
     right_group = LaunchConfiguration("right_group")
+    dual_group = LaunchConfiguration("dual_group")
+    pairing_window_sec = LaunchConfiguration("pairing_window_sec")
+    max_queue_per_arm = LaunchConfiguration("max_queue_per_arm")
 
     moveit_config = (
         MoveItConfigsBuilder(
@@ -57,6 +61,21 @@ def generate_launch_description():
                 default_value="right_ur_manipulator",
                 description="MoveIt planning group for the right arm",
             ),
+            DeclareLaunchArgument(
+                "dual_group",
+                default_value="both_ur_manipulator",
+                description="Existing combined MoveIt planning group for both arms",
+            ),
+            DeclareLaunchArgument(
+                "pairing_window_sec",
+                default_value="0.15",
+                description="Time window to pair left/right goals into a coordinated trajectory [s]",
+            ),
+            DeclareLaunchArgument(
+                "max_queue_per_arm",
+                default_value="0",
+                description="Maximum pending goals per arm; 0 means unlimited",
+            ),
             Node(
                 package="dual_arm_driver",
                 executable="tcp_pose_publisher",
@@ -85,9 +104,12 @@ def generate_launch_description():
                     {
                         "left_group": left_group,
                         "right_group": right_group,
+                        "dual_group": dual_group,
+                        "pairing_window_sec": ParameterValue(pairing_window_sec, value_type=float),
+                        "max_queue_per_arm": ParameterValue(max_queue_per_arm, value_type=int),
                         "left_end_effector_link": "left_tcp",
                         "right_end_effector_link": "right_tcp",
-                        "execute": execute,
+                        "execute": ParameterValue(execute, value_type=bool),
                         "velocity_scaling": 0.10,
                         "acceleration_scaling": 0.10,
                         "planning_time": 5.0,
