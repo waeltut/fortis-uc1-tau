@@ -47,6 +47,10 @@ public:
     declare_parameter<double>("acceleration_scaling", 0.10);
     declare_parameter<double>("planning_time", 5.0);
     declare_parameter<int>("planning_attempts", 5);
+    // Additional Cartesian IK branches to try for coordinated dual-arm goals.
+    declare_parameter<int>("dual_ik_attempts", 8);
+    // Total wall-time budget for combined IK candidate planning, in seconds.
+    declare_parameter<double>("dual_ik_budget_sec", 12.0);
     declare_parameter<double>("pairing_window_sec", 0.15);
     declare_parameter<bool>("execute", true);
     // 0 means unlimited. Nonzero rejects arrivals once that arm's queue is full.
@@ -68,6 +72,8 @@ public:
     acceleration_scaling_ = get_parameter("acceleration_scaling").as_double();
     planning_time_ = get_parameter("planning_time").as_double();
     planning_attempts_ = get_parameter("planning_attempts").as_int();
+    dual_ik_attempts_ = get_parameter("dual_ik_attempts").as_int();
+    dual_ik_budget_sec_ = get_parameter("dual_ik_budget_sec").as_double();
     pairing_window_sec_ = get_parameter("pairing_window_sec").as_double();
     execute_ = get_parameter("execute").as_bool();
     max_queue_per_arm_ = get_parameter("max_queue_per_arm").as_int();
@@ -86,7 +92,9 @@ public:
     if (!std::isfinite(velocity_scaling_) || velocity_scaling_ <= 0.0 ||
         velocity_scaling_ > 1.0 || !std::isfinite(acceleration_scaling_) ||
         acceleration_scaling_ <= 0.0 || acceleration_scaling_ > 1.0 ||
-        !std::isfinite(planning_time_) || planning_time_ <= 0.0 || planning_attempts_ < 1) {
+        !std::isfinite(planning_time_) || planning_time_ <= 0.0 || planning_attempts_ < 1 ||
+        dual_ik_attempts_ < 1 || dual_ik_attempts_ > 64 ||
+        !std::isfinite(dual_ik_budget_sec_) || dual_ik_budget_sec_ <= 0.0) {
       throw std::invalid_argument("Invalid planning/scaling parameters");
     }
 
@@ -564,7 +572,8 @@ private:
   PlanResult plan_dual(const PoseStamped& left_target, const PoseStamped& right_target)
   {
     PlanResult result;
-    // Snapshot robot state NOW, after the previous trajectory completes.
+    // Keep the real measured state as the start of EVERY candidate motion.
+    // Alternative SRDF/random states below are ONLY IK seeds, never motion starts.
     auto state = dual_move_group_->getCurrentState(2.0);
     if (!state) {
       RCLCPP_ERROR(get_logger(), "%s: no current robot state", dual_group_.c_str());
@@ -573,49 +582,136 @@ private:
     const auto model = dual_move_group_->getRobotModel();
     const auto* left_jmg = model->getJointModelGroup(left_group_);
     const auto* right_jmg = model->getJointModelGroup(right_group_);
-
-    // Each ordinary 6-DOF IK solver uses this *same* state snapshot as seed.
-    left_move_group_->setStartState(*state);
-    left_move_group_->clearPoseTargets();
-    if (!left_move_group_->setJointValueTarget(*state) ||
-        !left_move_group_->setJointValueTarget(left_target, left_ee_)) {
-      RCLCPP_ERROR(get_logger(), "dual_arm: left IK failed; nothing executed");
-      return result;
-    }
-    right_move_group_->setStartState(*state);
-    right_move_group_->clearPoseTargets();
-    if (!right_move_group_->setJointValueTarget(*state) ||
-        !right_move_group_->setJointValueTarget(right_target, right_ee_)) {
-      RCLCPP_ERROR(get_logger(), "dual_arm: right IK failed; nothing executed");
+    if (!left_jmg || !right_jmg) {
+      RCLCPP_ERROR(get_logger(), "dual_arm: missing joint model groups");
       return result;
     }
 
-    moveit::core::RobotState target(*state);
-    const auto& left_ik = left_move_group_->getJointValueTarget();
-    const auto& right_ik = right_move_group_->getJointValueTarget();
-    for (const auto& joint : left_jmg->getVariableNames()) {
-      target.setVariablePosition(joint, left_ik.getVariablePosition(joint));
-    }
-    for (const auto& joint : right_jmg->getVariableNames()) {
-      target.setVariablePosition(joint, right_ik.getVariablePosition(joint));
-    }
-    target.update();
+    const auto begin = Clock::now();
+    // The native MoveGroupInterface pose->IK method does not check collisions.
+    // Therefore we must test alternative IK branches with the MoveIt planner.
+    // RRTConnect verifies joint limits, the *combined* planning scene and the
+    // complete motion before we ever pass a trajectory to execution.
+    for (int attempt = 0; attempt < dual_ik_attempts_; ++attempt) {
+      if (is_stopping()) return result;
+      const double elapsed = std::chrono::duration<double>(Clock::now() - begin).count();
+      const double remaining = dual_ik_budget_sec_ - elapsed;
+      if (remaining <= 0.0) {
+        RCLCPP_WARN(get_logger(),
+          "dual_arm: IK/planning budget exhausted (%.1f s)", dual_ik_budget_sec_);
+        break;
+      }
 
-    dual_move_group_->setStartState(*state);
-    dual_move_group_->clearPoseTargets();
-    if (!dual_move_group_->setJointValueTarget(target)) {
-      RCLCPP_ERROR(get_logger(), "dual_arm: joint targets out of bounds");
-      return result;
+      moveit::core::RobotState seed(*state);
+      const char* seed_label = "measured state";
+      // Prefer reproducible, familiar UR5e postures before random sampling.
+      // Named configurations are used only to select a different IK solution.
+      switch (attempt) {
+        case 0:
+          break;
+        case 1:
+          seed_label = "right ready";
+          if (!seed.setToDefaultValues(right_group_, "ready"))
+            seed.setToRandomPositions(right_jmg);
+          break;
+        case 2:
+          seed_label = "right home";
+          if (!seed.setToDefaultValues(right_group_, "home"))
+            seed.setToRandomPositions(right_jmg);
+          break;
+        case 3:
+          seed_label = "both ready";
+          if (!seed.setToDefaultValues(dual_group_, "ready")) {
+            seed.setToRandomPositions(left_jmg);
+            seed.setToRandomPositions(right_jmg);
+          }
+          break;
+        case 4:
+          seed_label = "both home";
+          if (!seed.setToDefaultValues(dual_group_, "home")) {
+            seed.setToRandomPositions(left_jmg);
+            seed.setToRandomPositions(right_jmg);
+          }
+          break;
+        default:
+          if (attempt % 2 == 1) {
+            seed_label = "random right";
+            seed.setToRandomPositions(right_jmg);
+          } else {
+            seed_label = "random both";
+            seed.setToRandomPositions(left_jmg);
+            seed.setToRandomPositions(right_jmg);
+          }
+          break;
+      }
+      seed.update();
+      RCLCPP_INFO(get_logger(), "dual_arm: IK candidate %d/%d, seed=%s",
+        attempt + 1, dual_ik_attempts_, seed_label);
+
+      // Important: setJointValueTarget(pose, ee) calls setFromIK using the
+      // current *start state* as the seed, so set that to our trial state.
+      left_move_group_->setStartState(seed);
+      left_move_group_->clearPoseTargets();
+      if (!left_move_group_->setJointValueTarget(seed) ||
+          !left_move_group_->setJointValueTarget(left_target, left_ee_)) {
+        RCLCPP_WARN(get_logger(), "dual_arm: left IK failed for seed %s", seed_label);
+        continue;
+      }
+      right_move_group_->setStartState(seed);
+      right_move_group_->clearPoseTargets();
+      if (!right_move_group_->setJointValueTarget(seed) ||
+          !right_move_group_->setJointValueTarget(right_target, right_ee_)) {
+        RCLCPP_WARN(get_logger(), "dual_arm: right IK failed for seed %s", seed_label);
+        continue;
+      }
+
+      std::vector<double> left_ik;
+      std::vector<double> right_ik;
+      left_move_group_->getJointValueTarget(left_ik);   // Non-deprecated overload.
+      right_move_group_->getJointValueTarget(right_ik); // Non-deprecated overload.
+      if (left_ik.size() != left_jmg->getVariableCount() ||
+          right_ik.size() != right_jmg->getVariableCount()) {
+        RCLCPP_ERROR(get_logger(), "dual_arm: unexpected IK vector length");
+        return result;
+      }
+
+      moveit::core::RobotState goal(*state);
+      goal.setJointGroupPositions(left_jmg, left_ik);
+      goal.setJointGroupPositions(right_jmg, right_ik);
+      goal.update();
+
+      // Never set the start state to 'seed' or 'goal' here: plan from the
+      // actual robot state, and check the full path including both arms.
+      dual_move_group_->setStartState(*state);
+      dual_move_group_->clearPoseTargets();
+      if (!dual_move_group_->setJointValueTarget(goal)) {
+        RCLCPP_WARN(get_logger(), "dual_arm: IK candidate %d out of bounds", attempt + 1);
+        continue;
+      }
+      // Respect a single total planning budget across candidate branches.
+      dual_move_group_->setPlanningTime(std::min(planning_time_, remaining));
+      MoveGroup::Plan candidate;
+      const auto code = dual_move_group_->plan(candidate);
+      if (code == moveit::core::MoveItErrorCode::SUCCESS) {
+        dual_move_group_->setPlanningTime(planning_time_);
+        result.success = true;
+        result.plan = std::move(candidate);
+        RCLCPP_INFO(get_logger(),
+          "dual_arm: IK candidate %d/%d planned (%zu joints, %zu points)",
+          attempt + 1, dual_ik_attempts_,
+          result.plan.trajectory_.joint_trajectory.joint_names.size(),
+          result.plan.trajectory_.joint_trajectory.points.size());
+        return result;
+      }
+      RCLCPP_WARN(get_logger(),
+        "dual_arm: IK candidate %d produced no valid path (MoveIt %d); trying different seed",
+        attempt + 1, code.val);
     }
-    const auto code = dual_move_group_->plan(result.plan);
-    result.success = (code == moveit::core::MoveItErrorCode::SUCCESS);
-    if (!result.success) {
-      RCLCPP_ERROR(get_logger(), "dual_arm: planning failed (%d); nothing executed", code.val);
-    } else {
-      RCLCPP_INFO(get_logger(), "dual_arm: planned %zu joint names, %zu points",
-        result.plan.trajectory_.joint_trajectory.joint_names.size(),
-        result.plan.trajectory_.joint_trajectory.points.size());
-    }
+
+    dual_move_group_->setPlanningTime(planning_time_);
+    RCLCPP_ERROR(get_logger(),
+      "dual_arm: no valid combined motion found after %d IK attempts / %.1f s budget; nothing executed",
+      dual_ik_attempts_, dual_ik_budget_sec_);
     return result;
   }
 
@@ -662,6 +758,8 @@ private:
   double planning_time_ = 5.0;
   double pairing_window_sec_ = 0.15;
   int planning_attempts_ = 5;
+  int dual_ik_attempts_ = 8;
+  double dual_ik_budget_sec_ = 12.0;
   int max_queue_per_arm_ = 0;
   bool execute_ = true;
   std::string home_frame_;
