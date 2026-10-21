@@ -1,0 +1,5 @@
+#!/usr/bin/env python3
+from dual_arm_driver.tcp_pose_publisher import main
+
+if __name__ == "__main__":
+    main()

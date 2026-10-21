@@ -1,0 +1,12 @@
+dual_arm_moveit_commander:
+  ros__parameters:
+    velocity_scaling: 0.10
+    acceleration_scaling: 0.10
+    planning_time: 5.0
+    planning_attempts: 5
+    dual_ik_attempts: 8
+    dual_ik_budget_sec: 12.0
+    home_frame: mur
+    home_left_position: [0.6, 0.15, 1.2]
+    home_right_position: [0.6, -0.15, 1.2]
+    home_finger_positions: [0.9, 0.0, 1.0, 1.0, 1.0, 1.0]

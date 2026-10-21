@@ -4,7 +4,7 @@
      Commit Version: 1.6.0-4-g7f85cfe  Build Version: 1.6.7995.38578
 
      For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
-<robot xmlns:xacro="http://wiki.ros.org/xacro" name="BrainCoRightHandURDF">
+<robot xmlns:xacro="http://wiki.ros.org/xacro" name="brainco_hand">
   <xacro:macro name="brainco_hand" params="prefix:=''">
     <link name="${prefix}base_link">
       <inertial>
@@ -15,7 +15,7 @@
       <visual>
         <origin xyz="0 0 0" rpy="0 0 0"/>
         <geometry>
-          <mesh filename="package://BrainCoRightHandURDF/meshes/base_link.STL"/>
+          <mesh filename="package://duo_ur/meshes/brainco/base_link.STL"/>
         </geometry>
         <material name="">
           <color rgba="0.75294 0.75294 0.75294 1"/>
@@ -24,7 +24,7 @@
       <collision>
         <origin xyz="0 0 0" rpy="0 0 0"/>
         <geometry>
-          <mesh filename="package://BrainCoRightHandURDF/meshes/base_link.STL"/>
+          <mesh filename="package://duo_ur/meshes/brainco/base_link.STL"/>
         </geometry>
       </collision>
     </link>
@@ -37,7 +37,7 @@
       <visual>
         <origin xyz="0 0 0" rpy="0 0 0"/>
         <geometry>
-          <mesh filename="package://BrainCoRightHandURDF/meshes/thumb_prox.STL"/>
+          <mesh filename="package://duo_ur/meshes/brainco/thumb_prox.STL"/>
         </geometry>
         <material name="">
           <color rgba="1 1 1 1"/>
@@ -46,7 +46,7 @@
       <collision>
         <origin xyz="0 0 0" rpy="0 0 0"/>
         <geometry>
-          <mesh filename="package://BrainCoRightHandURDF/meshes/thumb_prox.STL"/>
+          <mesh filename="package://duo_ur/meshes/brainco/thumb_prox.STL"/>
         </geometry>
       </collision>
     </link>
@@ -64,7 +64,7 @@
       <visual>
         <origin xyz="0 0 0" rpy="0 0 0"/>
         <geometry>
-          <mesh filename="package://BrainCoRightHandURDF/meshes/thumb_dist.STL"/>
+          <mesh filename="package://duo_ur/meshes/brainco/thumb_dist.STL"/>
         </geometry>
         <material name="">
           <color rgba="0.75294 0.75294 0.75294 1"/>
@@ -73,7 +73,7 @@
       <collision>
         <origin xyz="0 0 0" rpy="0 0 0"/>
         <geometry>
-          <mesh filename="package://BrainCoRightHandURDF/meshes/thumb_dist.STL"/>
+          <mesh filename="package://duo_ur/meshes/brainco/thumb_dist.STL"/>
         </geometry>
       </collision>
     </link>
@@ -91,7 +91,7 @@
       <visual>
         <origin xyz="0 0 0" rpy="0 0 0"/>
         <geometry>
-          <mesh filename="package://BrainCoRightHandURDF/meshes/index_prox.STL"/>
+          <mesh filename="package://duo_ur/meshes/brainco/index_prox.STL"/>
         </geometry>
         <material name="">
           <color rgba="0.75294 0.75294 0.75294 1"/>
@@ -100,7 +100,7 @@
       <collision>
         <origin xyz="0 0 0" rpy="0 0 0"/>
         <geometry>
-          <mesh filename="package://BrainCoRightHandURDF/meshes/index_prox.STL"/>
+          <mesh filename="package://duo_ur/meshes/brainco/index_prox.STL"/>
         </geometry>
       </collision>
     </link>
@@ -118,7 +118,7 @@
       <visual>
         <origin xyz="0 0 0" rpy="0 0 0"/>
         <geometry>
-          <mesh filename="package://BrainCoRightHandURDF/meshes/index_dist.STL"/>
+          <mesh filename="package://duo_ur/meshes/brainco/index_dist.STL"/>
         </geometry>
         <material name="">
           <color rgba="0.75294 0.75294 0.75294 1"/>
@@ -127,7 +127,7 @@
       <collision>
         <origin xyz="0 0 0" rpy="0 0 0"/>
         <geometry>
-          <mesh filename="package://BrainCoRightHandURDF/meshes/index_dist.STL"/>
+          <mesh filename="package://duo_ur/meshes/brainco/index_dist.STL"/>
         </geometry>
       </collision>
     </link>
@@ -145,7 +145,7 @@
       <visual>
         <origin xyz="0 0 0" rpy="0 0 0"/>
         <geometry>
-          <mesh filename="package://BrainCoRightHandURDF/meshes/middle_prox.STL"/>
+          <mesh filename="package://duo_ur/meshes/brainco/middle_prox.STL"/>
         </geometry>
         <material name="">
           <color rgba="0.75294 0.75294 0.75294 1"/>
@@ -154,7 +154,7 @@
       <collision>
         <origin xyz="0 0 0" rpy="0 0 0"/>
         <geometry>
-          <mesh filename="package://BrainCoRightHandURDF/meshes/middle_prox.STL"/>
+          <mesh filename="package://duo_ur/meshes/brainco/middle_prox.STL"/>
         </geometry>
       </collision>
     </link>
@@ -172,7 +172,7 @@
       <visual>
         <origin xyz="0 0 0" rpy="0 0 0"/>
         <geometry>
-          <mesh filename="package://BrainCoRightHandURDF/meshes/middle_dist.STL"/>
+          <mesh filename="package://duo_ur/meshes/brainco/middle_dist.STL"/>
         </geometry>
         <material name="">
           <color rgba="0.75294 0.75294 0.75294 1"/>
@@ -181,7 +181,7 @@
       <collision>
         <origin xyz="0 0 0" rpy="0 0 0"/>
         <geometry>
-          <mesh filename="package://BrainCoRightHandURDF/meshes/middle_dist.STL"/>
+          <mesh filename="package://duo_ur/meshes/brainco/middle_dist.STL"/>
         </geometry>
       </collision>
     </link>
@@ -199,7 +199,7 @@
       <visual>
         <origin xyz="0 0 0" rpy="0 0 0"/>
         <geometry>
-          <mesh filename="package://BrainCoRightHandURDF/meshes/ring_prox.STL"/>
+          <mesh filename="package://duo_ur/meshes/brainco/ring_prox.STL"/>
         </geometry>
         <material name="">
           <color rgba="0.75294 0.75294 0.75294 1"/>
@@ -208,7 +208,7 @@
       <collision>
         <origin xyz="0 0 0" rpy="0 0 0"/>
         <geometry>
-          <mesh filename="package://BrainCoRightHandURDF/meshes/ring_prox.STL"/>
+          <mesh filename="package://duo_ur/meshes/brainco/ring_prox.STL"/>
         </geometry>
       </collision>
     </link>
@@ -226,7 +226,7 @@
       <visual>
         <origin xyz="0 0 0" rpy="0 0 0"/>
         <geometry>
-          <mesh filename="package://BrainCoRightHandURDF/meshes/ring_dist.STL"/>
+          <mesh filename="package://duo_ur/meshes/brainco/ring_dist.STL"/>
         </geometry>
         <material name="">
           <color rgba="0.75294 0.75294 0.75294 1"/>
@@ -235,7 +235,7 @@
       <collision>
         <origin xyz="0 0 0" rpy="0 0 0"/>
         <geometry>
-          <mesh filename="package://BrainCoRightHandURDF/meshes/ring_dist.STL"/>
+          <mesh filename="package://duo_ur/meshes/brainco/ring_dist.STL"/>
         </geometry>
       </collision>
     </link>
@@ -253,7 +253,7 @@
       <visual>
         <origin xyz="0 0 0" rpy="0 0 0"/>
         <geometry>
-          <mesh filename="package://BrainCoRightHandURDF/meshes/little_prox.STL"/>
+          <mesh filename="package://duo_ur/meshes/brainco/little_prox.STL"/>
         </geometry>
         <material name="">
           <color rgba="0.75294 0.75294 0.75294 1"/>
@@ -262,7 +262,7 @@
       <collision>
         <origin xyz="0 0 0" rpy="0 0 0"/>
         <geometry>
-          <mesh filename="package://BrainCoRightHandURDF/meshes/little_prox.STL"/>
+          <mesh filename="package://duo_ur/meshes/brainco/little_prox.STL"/>
         </geometry>
       </collision>
     </link>
@@ -280,7 +280,7 @@
       <visual>
         <origin xyz="0 0 0" rpy="0 0 0"/>
         <geometry>
-          <mesh filename="package://BrainCoRightHandURDF/meshes/little_dist.STL"/>
+          <mesh filename="package://duo_ur/meshes/brainco/little_dist.STL"/>
         </geometry>
         <material name="">
           <color rgba="0.75294 0.75294 0.75294 1"/>
@@ -289,7 +289,7 @@
       <collision>
         <origin xyz="0 0 0" rpy="0 0 0"/>
         <geometry>
-          <mesh filename="package://BrainCoRightHandURDF/meshes/little_dist.STL"/>
+          <mesh filename="package://duo_ur/meshes/brainco/little_dist.STL"/>
         </geometry>
       </collision>
     </link>

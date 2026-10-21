@@ -1,5 +1,7 @@
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
+from launch.conditions import IfCondition
+from launch.substitutions import AndSubstitution, NotSubstitution
 from launch.substitutions import LaunchConfiguration
 
 from launch_ros.actions import Node
@@ -14,6 +16,9 @@ from launch_ros.substitutions import FindPackageShare
 
 def generate_launch_description():
 
+    use_fake_hardware = LaunchConfiguration("use_fake_hardware")
+    start_hands = LaunchConfiguration("start_hands")
+    initialize_payload = LaunchConfiguration("initialize_payload")
     reference_frame = LaunchConfiguration("reference_frame")
     execute = LaunchConfiguration("execute")
     headless_mode = LaunchConfiguration("headless_mode")
@@ -26,7 +31,7 @@ def generate_launch_description():
 
     moveit_config = (
         MoveItConfigsBuilder(
-            "custom_robot", package_name="duo_ur5e_torso_moveit_config"
+            "custom_robot", package_name="duo_ur"
         )
         .robot_description_semantic(file_path="config/duo_ur_onehand.srdf")
         .robot_description_kinematics(file_path="config/kinematics.yaml")
@@ -36,6 +41,9 @@ def generate_launch_description():
 
     return LaunchDescription(
         [
+            DeclareLaunchArgument("use_fake_hardware", default_value="false"),
+            DeclareLaunchArgument("start_hands", default_value="true"),
+            DeclareLaunchArgument("initialize_payload", default_value="true"),
             DeclareLaunchArgument(
                 "reference_frame",
                 default_value="mur", # In TF tree world is basically the coordinates of MiR. Maybe off by few cm. MuR is above world by around 30cm
@@ -76,6 +84,20 @@ def generate_launch_description():
                 default_value="0",
                 description="Maximum pending goals per arm; 0 means unlimited",
             ),
+            IncludeLaunchDescription(
+                PythonLaunchDescriptionSource(
+                    PathJoinSubstitution(
+                        [
+                            FindPackageShare("duo_ur"),
+                            "launch",
+                            "duo_ur_real.launch.py",
+                        ]
+                    )
+                ),
+                launch_arguments={"headless_mode": headless_mode,
+                                  "use_fake_hardware": use_fake_hardware}.items(),
+            ),
+
             Node(
                 package="dual_arm_driver",
                 executable="tcp_pose_publisher",
@@ -93,14 +115,17 @@ def generate_launch_description():
                 ],
             ),
             Node(
-                package="moveit_utils_pkg",
+                package="dual_arm_driver",
                 executable="dual_arm_pose_commander",
                 name="dual_arm_moveit_commander",
                 output="screen",
                 parameters=[
-                    moveit_config.robot_description,
+                    {"robot_description": ParameterValue(
+                        LaunchConfiguration("dual_arm_robot_description"), value_type=str)},
                     moveit_config.robot_description_semantic,
                     moveit_config.robot_description_kinematics,
+                    PathJoinSubstitution([FindPackageShare("dual_arm_driver"),
+                                          "config", "commander.yaml"]),
                     {
                         "left_group": left_group,
                         "right_group": right_group,
@@ -110,31 +135,15 @@ def generate_launch_description():
                         "left_end_effector_link": "left_tcp",
                         "right_end_effector_link": "right_tcp",
                         "execute": ParameterValue(execute, value_type=bool),
-                        "velocity_scaling": 0.10,
-                        "acceleration_scaling": 0.10,
-                        "planning_time": 5.0,
-                        "planning_attempts": 5,
                     },
                 ],
             ),
-            IncludeLaunchDescription(
-                PythonLaunchDescriptionSource(
-                    PathJoinSubstitution(
-                        [
-                            FindPackageShare("duo_ur"),
-                            "launch",
-                            "duo_ur_real.launch.py",
-                        ]
-                    )
-                ),
-                launch_arguments={"headless_mode": headless_mode}.items(),
-            ),
-
             # Apply configured mass, CoG and optional inertia once each UR program runs.
             # Requires both /<side>_io_and_status_controller/set_payload services.
             Node(
                 package="dual_arm_driver",
                 executable="payload_initializer",
+                condition=IfCondition(AndSubstitution(initialize_payload, NotSubstitution(use_fake_hardware))),
                 name="payload_initializer",
                 output="screen",
                 parameters=[
@@ -146,6 +155,7 @@ def generate_launch_description():
             Node(
                 package="hand_control",
                 executable="hand_control",
+                condition=IfCondition(AndSubstitution(start_hands, NotSubstitution(use_fake_hardware))),
                 name="left_hand_control",
                 output="screen",
                 parameters=[{"hand": "L"}],
@@ -154,6 +164,7 @@ def generate_launch_description():
             Node(
                 package="hand_control",
                 executable="hand_control",
+                condition=IfCondition(AndSubstitution(start_hands, NotSubstitution(use_fake_hardware))),
                 name="right_hand_control",
                 output="screen",
                 parameters=[{"hand": "R"}],

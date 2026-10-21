@@ -36,7 +36,7 @@ from launch_ros.parameter_descriptions import ParameterFile, ParameterValue
 from launch_ros.substitutions import FindPackageShare
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, OpaqueFunction, RegisterEventHandler, LogInfo
+from launch.actions import DeclareLaunchArgument, OpaqueFunction, RegisterEventHandler, LogInfo, SetLaunchConfiguration
 from launch.conditions import IfCondition, UnlessCondition
 from launch.event_handlers import OnProcessExit
 from launch.substitutions import (
@@ -161,6 +161,9 @@ def launch_setup(context, *args, **kwargs):
             "safety_k_position:=",
             safety_k_position,
             " ",
+            "ur_type:=",
+            ur_type,
+            " ",
             "name:=",
             "ur",
             " ",
@@ -255,7 +258,7 @@ def launch_setup(context, *args, **kwargs):
     )
 
     rviz_config_file = PathJoinSubstitution(
-        [FindPackageShare("duo_ur"), "rviz", "adv_control_duo_ur5e.rviz"]
+        [FindPackageShare("duo_ur"), "rviz", "moveit.rviz"]
     )
 
     update_rate_config_file = PathJoinSubstitution(
@@ -290,42 +293,7 @@ def launch_setup(context, *args, **kwargs):
             ParameterFile(initial_joint_controllers, allow_substs=True),
         ],
         remappings=[
-            ("left_motion_control_handle/target_frame", "left_target_frame"),
-            ("left_cartesian_motion_controller/target_frame", "left_target_frame"),
-            ("left_cartesian_compliance_controller/target_frame", "left_target_frame"),
-            ("left_cartesian_force_controller/target_wrench", "left_target_wrench"),
-            (
-                "left_cartesian_compliance_controller/target_wrench",
-                "left_target_wrench",
-            ),
-            (
-                "left_cartesian_force_controller/ft_sensor_wrench",
-                "left_ft_sensor_wrench",
-            ),
-            (
-                "left_cartesian_compliance_controller/ft_sensor_wrench",
-                "left_ft_sensor_wrench",
-            ),
             ("left_force_torque_sensor_broadcaster/wrench", "left_ft_sensor_wrench"),
-            ("right_motion_control_handle/target_frame", "right_target_frame"),
-            ("right_cartesian_motion_controller/target_frame", "right_target_frame"),
-            (
-                "right_cartesian_compliance_controller/target_frame",
-                "right_target_frame",
-            ),
-            ("right_cartesian_force_controller/target_wrench", "right_target_wrench"),
-            (
-                "right_cartesian_compliance_controller/target_wrench",
-                "right_target_wrench",
-            ),
-            (
-                "right_cartesian_force_controller/ft_sensor_wrench",
-                "right_ft_sensor_wrench",
-            ),
-            (
-                "right_cartesian_compliance_controller/ft_sensor_wrench",
-                "right_ft_sensor_wrench",
-            ),
             ("right_force_torque_sensor_broadcaster/wrench", "right_ft_sensor_wrench"),
         ],
         output="screen",
@@ -338,7 +306,7 @@ def launch_setup(context, *args, **kwargs):
             AndSubstitution(launch_dashboard_client, NotSubstitution(use_fake_hardware))
         ),
         executable="dashboard_client",
-        name="left_dashboard_client",
+        name="right_dashboard_client",
         output="screen",
         emulate_tty=True,
         parameters=[{"robot_ip": robot_ip_1}],
@@ -350,7 +318,7 @@ def launch_setup(context, *args, **kwargs):
             AndSubstitution(launch_dashboard_client, NotSubstitution(use_fake_hardware))
         ),
         executable="dashboard_client",
-        name="right_dashboard_client",
+        name="left_dashboard_client",
         output="screen",
         emulate_tty=True,
         parameters=[{"robot_ip": robot_ip_2}],
@@ -358,7 +326,7 @@ def launch_setup(context, *args, **kwargs):
 
     tool_communication_node = Node(
         package="ur_robot_driver",
-        condition=IfCondition(use_tool_communication),
+        condition=IfCondition(AndSubstitution(use_tool_communication, NotSubstitution(use_fake_hardware))),
         executable="tool_communication.py",
         name="ur_tool_comm",
         output="screen",
@@ -374,6 +342,7 @@ def launch_setup(context, *args, **kwargs):
     urscript_interface_1 = Node(
         package="ur_robot_driver",
         executable="urscript_interface",
+        condition=UnlessCondition(use_fake_hardware),
         name="right_urscript_interface",
         parameters=[{"robot_ip": robot_ip_1}],
         output="screen",
@@ -382,6 +351,7 @@ def launch_setup(context, *args, **kwargs):
     urscript_interface_2 = Node(
         package="ur_robot_driver",
         executable="urscript_interface",
+        condition=UnlessCondition(use_fake_hardware),
         name="left_urscript_interface",
         parameters=[{"robot_ip": robot_ip_2}],
         output="screen",
@@ -408,10 +378,6 @@ def launch_setup(context, *args, **kwargs):
         "passthrough_trajectory_controller",
         "freedrive_mode_controller",
         "tool_contact_controller",
-        "cartesian_compliance_controller",
-        "cartesian_force_controller",
-        "cartesian_motion_controller",
-        "motion_control_handle",
     )
 
     def controller_stopper(arm):
@@ -475,9 +441,11 @@ def launch_setup(context, *args, **kwargs):
             "scaled_joint_trajectory_controller",
         )],
     ]
-    if use_fake_hardware.perform(context).lower() == "true":
-        for arm in ("left", "right"):
-            controllers_active.remove(f"{arm}_tcp_pose_broadcaster")
+    fake_hardware = use_fake_hardware.perform(context).lower() == "true"
+    if fake_hardware:
+        controllers_active = ["joint_state_broadcaster",
+                              "left_joint_trajectory_controller",
+                              "right_joint_trajectory_controller"]
 
     # Start the stoppers only after both scaled controllers are spawned active.
     # Stoppers intentionally park them until External Control is running.
@@ -501,7 +469,7 @@ def launch_setup(context, *args, **kwargs):
 
     moveit_config = (
         MoveItConfigsBuilder(
-            "custom_robot", package_name="duo_ur5e_torso_moveit_config"
+            "custom_robot", package_name="duo_ur"
         )
         .robot_description(robot_description_file)
         .robot_description_semantic(file_path="config/duo_ur_onehand.srdf")
@@ -515,6 +483,16 @@ def launch_setup(context, *args, **kwargs):
         .planning_pipelines(pipelines=["ompl"])
         .to_moveit_configs()
     )
+
+    moveit_config.robot_description = robot_description
+    if fake_hardware:
+        manager = moveit_config.trajectory_execution["moveit_simple_controller_manager"]
+        for side in ("left", "right"):
+            old = f"{side}_scaled_joint_trajectory_controller"
+            new = f"{side}_joint_trajectory_controller"
+            manager[new] = manager.pop(old)
+        manager["controller_names"] = [f"{side}_joint_trajectory_controller"
+                                       for side in ("left", "right")]
 
     use_sim_time = {"use_sim_time": False}
     config_dict = moveit_config.to_dict()
@@ -544,6 +522,7 @@ def launch_setup(context, *args, **kwargs):
 
     nodes_to_start = (
         [
+            SetLaunchConfiguration("dual_arm_robot_description", robot_description_content),
             control_node,
             ur_control_node,
             dashboard_client_node_1,
@@ -632,7 +611,7 @@ def generate_launch_description():
     declared_arguments.append(
         DeclareLaunchArgument(
             "controllers_file",
-            default_value="duo_ur_adv_controllers.yaml",
+            default_value="controllers.yaml",
             description="YAML file with the controllers configuration.",
         )
     )
@@ -662,6 +641,7 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "tf_prefix_1",
             default_value="right_",
+            choices=["right_"],
             description="tf_prefix of the joint names, useful for "
             "multi-robot setup. If changed, also joint names in the controllers' configuration "
             "have to be updated.",
@@ -671,6 +651,7 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "tf_prefix_2",
             default_value="left_",
+            choices=["left_"],
             description="tf_prefix of the joint names, useful for "
             "multi-robot setup. If changed, also joint names in the controllers' configuration "
             "have to be updated.",

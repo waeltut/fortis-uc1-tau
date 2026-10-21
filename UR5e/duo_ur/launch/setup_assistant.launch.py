@@ -5,7 +5,7 @@ from moveit_configs_utils.launches import generate_setup_assistant_launch
 def generate_launch_description():
     moveit_config = (
         MoveItConfigsBuilder(
-            "custom_robot", package_name="duo_ur5e_torso_moveit_config"
+            "custom_robot", package_name="duo_ur"
         )
         .planning_pipelines(pipelines=["ompl"])
         .to_moveit_configs()

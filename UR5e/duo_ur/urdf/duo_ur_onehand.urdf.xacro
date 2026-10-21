@@ -5,7 +5,7 @@
    <xacro:arg name="name" default="ur"/>
    
    <xacro:include filename="$(find duo_ur)/urdf/ur5e_macro.xacro"/>
-   <xacro:include filename="$(find BrainCoRightHandURDF)/urdf/BrainCoRightHandURDF.urdf.xacro"/>
+   <xacro:include filename="$(find duo_ur)/urdf/brainco_hand.urdf.xacro"/>
 
    <xacro:arg name="ur_type" default="ur5e"/>
 
@@ -51,7 +51,7 @@
    <xacro:arg name="fake_sensor_commands" default="false" />
    <xacro:arg name="sim_gazebo" default="false" />
    <xacro:arg name="sim_ignition" default="false" />
-   <xacro:arg name="simulation_controllers" default="$(find duo_ur)/config/duo_ur5e_controllers.yaml" />
+   <xacro:arg name="simulation_controllers" default="$(find duo_ur)/config/controllers.yaml" />
    
    <material name="Light_Grey">
     <color rgba="0.8 0.8 0.8 1.0"/>
