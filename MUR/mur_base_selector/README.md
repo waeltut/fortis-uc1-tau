@@ -63,6 +63,12 @@ ros2 topic pub --once /base_selection/target geometry_msgs/msg/PoseStamped \
 '{header: {frame_id: map}, pose: {position: {x: 2.5, y: 0.0, z: 0.8}, orientation: {x: 0.0, y: 0.7071067811865476, z: 0.0, w: 0.7071067811865476}}}'
 ```
 
+```bash
+ros2 topic pub /base_selection/target geometry_msgs/msg/PoseStamped \
+'{header: {frame_id: map}, pose: {position: {x: 1.4, y: 0.0, z: 1.2}, orientation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0}}}'
+```
+
+
 The selected arm's configured TCP link is the target. `both` asks for independent
 reachability evidence for each arm at the same target/base pose; it is not two
 independent target inputs or a simultaneous collision-free dual-arm plan.

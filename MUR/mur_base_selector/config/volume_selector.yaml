@@ -64,8 +64,8 @@ mur_base_selector:
     minimum_orientation_coverage: 0.9
     max_height_error: 0.05
     max_orientation_error_deg: 30.0
-    travel_inflation_weight: 3.0
-    weight_navigation: 1.0
+    travel_inflation_weight: 0.5
+    weight_navigation: 0.2
     weight_destination_cost: 2.0
     weight_working_distance: 1.0
     weight_facing: 0.5

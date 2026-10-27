@@ -146,8 +146,8 @@ controller_server:
     general_goal_checker:
       stateful: True
       plugin: "nav2_controller::SimpleGoalChecker"
-      xy_goal_tolerance: 0.40
-      yaw_goal_tolerance: 0.40
+      xy_goal_tolerance: 0.10
+      yaw_goal_tolerance: 0.10
     # DWB parameters
     FollowPath:
       plugin: "dwb_core::DWBLocalPlanner"
@@ -234,8 +234,8 @@ local_costmap:
           max_obstacle_height: 2.0
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        inflation_radius: 0.7
-        cost_scaling_factor: 5.0
+        inflation_radius: 0.6
+        cost_scaling_factor: 15.0
       always_send_full_costmap: True
       transform_tolerance: 0.2
 
@@ -275,8 +275,8 @@ global_costmap:
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         enabled: true
-        inflation_radius: 0.7
-        cost_scaling_factor: 5.0
+        inflation_radius: 0.6
+        cost_scaling_factor: 15.0
       audio_layer:
         plugin: "adaptive_layers::AudioLayer"
         enabled: true
@@ -382,3 +382,31 @@ velocity_smoother:
     odom_duration: 0.1
     deadband_velocity: [0.0, 0.0, 0.0]
     velocity_timeout: 1.0
+
+python3 - <<'PY'
+import math
+import rclpy
+from rclpy.time import Time
+from tf2_ros import Buffer, TransformListener
+
+rclpy.init()
+node = rclpy.create_node('tcp_error_check')
+tf = Buffer()
+listener = TransformListener(tf, node)
+
+while rclpy.ok() and not tf.can_transform('map', 'left_tcp', Time()):
+    rclpy.spin_once(node, timeout_sec=0.1)
+
+t = tf.lookup_transform('map', 'left_tcp', Time()).transform
+p, q = t.translation, t.rotation
+
+linear = math.dist((1.4, 0.0, 1.2), (p.x, p.y, p.z))
+norm = math.sqrt(q.x*q.x + q.y*q.y + q.z*q.z + q.w*q.w)
+angular = math.degrees(2 * math.acos(min(1.0, abs(q.w) / norm)))
+
+print(f"Linear error:  {linear*1000:.2f} mm")
+print(f"Angular error: {angular:.3f}°")
+
+node.destroy_node()
+rclpy.shutdown()
+PY
