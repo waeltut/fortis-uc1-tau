@@ -19,5 +19,6 @@ setup(
     maintainer_email='maintainer@example.com',
     description='Manually confirmed MiR navigation and fresh post-navigation MoveIt arm motion test',
     license='Apache-2.0',
-    entry_points={'console_scripts': ['mur_test = mur_test.test_node:main']},
+    entry_points={'console_scripts': [
+        'pose_height_relay = mur_test.pose_height_relay:main','mur_test = mur_test.test_node:main']},
 )

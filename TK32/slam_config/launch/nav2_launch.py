@@ -103,6 +103,9 @@ def generate_launch_description():
             name='controller_server',
             output='screen',
             parameters=[configured_params],
+            remappings=[
+                ('cmd_vel', 'cmd_vel_nav'),
+            ],
         ),
 
         Node(
@@ -127,6 +130,9 @@ def generate_launch_description():
             name='behavior_server',
             output='screen',
             parameters=[configured_params],
+            remappings=[
+                ('cmd_vel', 'cmd_vel_nav'),
+            ],
         ),
 
         Node(
@@ -143,6 +149,10 @@ def generate_launch_description():
             name='velocity_smoother',
             output='screen',
             parameters=[configured_params],
+                remappings=[
+                ('cmd_vel', 'cmd_vel_nav'),
+                ('cmd_vel_smoothed', 'cmd_vel'),
+            ],
         ),
 
         # ==================================================
