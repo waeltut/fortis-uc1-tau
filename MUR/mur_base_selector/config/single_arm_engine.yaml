@@ -1,0 +1,12 @@
+# Example only: replace names with your MoveIt model's actual groups/links.
+/**:
+  ros__parameters:
+    source_node: /move_group
+    reference_frame: base_link
+    base_frame: base_link
+    arm_names: [manipulator]
+    arm_groups: [arm]
+    arm_tips: [tool0]
+    joint_limit_margin: 0.02
+    verification_position_tolerance: 0.001
+    verification_orientation_tolerance: 0.01

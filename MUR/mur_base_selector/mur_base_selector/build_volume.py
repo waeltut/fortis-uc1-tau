@@ -29,10 +29,10 @@ def main(args=None):
     package=Path(get_package_share_directory('mur_base_selector'))
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config',default=str(package/'config/volume_generation.yaml'))
-    parser.add_argument('--engine-config',default=str(Path(get_package_share_directory('mur_reachability'))/'config/volume_engine.yaml'))
+    parser.add_argument('--engine-config',default=str(package/'config/volume_engine.yaml'))
     parser.add_argument('--output',help='Override volume_file from generation config')
     parser.add_argument('--resume',action='store_true')
-    parser.add_argument('--workers',type=int,choices=(1,2),default=2,help='Offline arm workers (default: 2, one per arm); does not change cache identity')
+    parser.add_argument('--workers',type=int,default=2,help='Maximum parallel arm workers; capped at arm count')
     parser.add_argument('--use-sim-time',action='store_true')
     parser.add_argument('--estimate-only',action='store_true',help='Print sample count without ROS or MoveIt')
     opts=parser.parse_args(args)
@@ -42,7 +42,8 @@ def main(args=None):
     points,quats=workspace_points(cfg),orientations(cfg['orientation_step_deg'])
     if len(points)>200000:raise ValueError('Too many voxels; narrow bounds or increase voxel_size')
     allowed=np.array([allowed_orientations(p,quats,cfg['tool_axis'],cfg['min_inward_angle_deg'],cfg['inward_reference']) for p in points])
-    print(f'{len(points)} FOV-filtered voxels; {len(quats)} full orientations; {2*int(allowed.sum())} arm/pose checks',flush=True)
+    print(f'{len(points)} FOV-filtered voxels; {len(quats)} full orientations; {int(allowed.sum())} checks per arm',flush=True)
+    if opts.workers < 1:raise ValueError('workers must be positive')
     print('IK occurs ONLY here, offline. A failed bounded solve is recorded as unknown/unavailable.',flush=True)
     if opts.estimate_only:return
     if output.exists() and not opts.resume:raise RuntimeError('Output already exists. Use --resume or choose a new output path.')
@@ -51,15 +52,16 @@ def main(args=None):
     from rclpy.parameter import Parameter
     from rclpy.time import Time
     from .navigation import TfReceiver
-    from mur_reachability_engine import Engine
+    from mur_base_selector_engine import Engine
     rclpy.init(args=[])
     node=Node('mur_volume_builder',parameter_overrides=[Parameter('use_sim_time',value=opts.use_sim_time)])
-    tf=TfReceiver(node);engine=None;right_engine=None
+    tf=TfReceiver(node);engine=None;extra_engines=[]
     try:
         engine=Engine(str(Path(opts.engine_config).expanduser()),opts.use_sim_time)
-        if not hasattr(engine,'model_info'):raise RuntimeError('Rebuild and source mur_reachability: self/body collision engine required')
+        if not hasattr(engine,'model_info'):raise RuntimeError('Rebuild and source mur_base_selector: self/body collision engine required')
         context=yaml.safe_load(engine.model_info())
         if context.get('reachability_policy')!='self_body_ignore_other_arm_v1':raise RuntimeError('Wrong native reachability policy')
+        names=context['arm_names'];count=len(names);workers=min(opts.workers,count)
         deadline=time.monotonic()+10
         while True:
             try:t=tf.buffer.lookup_transform(context['base_frame'],context['reference_frame'],Time()).transform;break
@@ -70,7 +72,7 @@ def main(args=None):
         meta={'schema':2,'reachability_policy':'self_body_ignore_other_arm_v1','generation':cfg,'context':context,'mount':mount,'evidence':'sampled endpoint IK, joint limits and SRDF self/body collision checks; opposite arm excluded'}
         signature=json.dumps(meta,sort_keys=True)
         meta['cache_id']=hashlib.sha256(signature.encode()).hexdigest()[:20]
-        masks=np.zeros((2,len(points),len(quats)),dtype=bool);completed=np.zeros((2,len(points)),dtype=bool)
+        masks=np.zeros((count,len(points),len(quats)),dtype=bool);completed=np.zeros((count,len(points)),dtype=bool)
         if opts.resume:
             old=Volume(output,require_complete=False)
             # Resume depends on geometry and settings, never live arm positions.
@@ -78,24 +80,26 @@ def main(args=None):
                 raise RuntimeError('Checkpoint model/configuration/mount mismatch')
             if not np.array_equal(old.points,points) or not np.allclose(old.quats,quats):raise RuntimeError('Checkpoint geometry mismatch')
             masks,completed=old.masks,old.done;meta=old.meta
-        engines=[engine,engine]
-        if opts.workers==2 and not completed.all():
-            right_engine=Engine(str(Path(opts.engine_config).expanduser()),opts.use_sim_time,'mur_kinematics_right')
-            if yaml.safe_load(right_engine.model_info())!=context:raise RuntimeError('Worker robot models differ')
-            engines[1]=right_engine
+        engines=[engine]*count
+        if workers>1 and not completed.all():
+            for a in range(1,count):
+                other=Engine(str(Path(opts.engine_config).expanduser()),opts.use_sim_time,'mur_kinematics_'+names[a])
+                extra_engines.append(other)
+                if yaml.safe_load(other.model_info())!=context:raise RuntimeError('Worker robot models differ')
+                engines[a]=other
         def save():save_volume(output,meta,points,quats,masks,completed)
         def report(done,elapsed):
-            left,right=map(int,done.sum(axis=1))
-            print(f'{left+right}/{done.size} arm/voxels complete; left={left}/{len(points)}, right={right}/{len(points)}; {elapsed:.0f} s this run',flush=True)
-        print(f'Using {opts.workers} offline worker(s); independent arm solvers; self/body collision checks enabled; opposite arm excluded.',flush=True)
+            progress=', '.join(f'{name}={int(done[a].sum())}/{len(points)}' for a,name in enumerate(names))
+            print(f'{int(done.sum())}/{done.size} arm/voxels complete; {progress}; {elapsed:.0f} s this run',flush=True)
+        print(f'Using {workers} offline worker(s); self/body checks enabled; other arms excluded.',flush=True)
         if not completed.all():
-            generate_parallel(engines,points,quats,allowed,mount,cfg,masks,completed,save,report,opts.workers)
+            generate_parallel(engines,points,quats,allowed,mount,cfg,masks,completed,save,report,workers)
         volume=Volume(output)
-        for a,name in enumerate(('left','right')):
+        for a,name in enumerate(names):
             print(f'{name}: {int((volume.coverage[a]>=.9).sum())} voxels with >=90% sampled allowed-orientation coverage',flush=True)
         print(f'Saved {output}; cache_id={meta["cache_id"]}',flush=True)
     finally:
-        if right_engine:right_engine.close()
+        for other in reversed(extra_engines):other.close()
         if engine:engine.close()
         tf.close();node.destroy_node();rclpy.shutdown()
 

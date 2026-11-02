@@ -6,8 +6,8 @@ import unittest
 import sys
 sys.path.insert(0,str(Path(__file__).parents[1]))
 import numpy as np
-from mur_base_selector.volume import Volume,save_volume,orientations,workspace_points,allowed_orientations,TravelField,sector_penalty,qmul
-from mur_base_selector.core import Grid
+from MUR.mur_base_selector.mur_base_selector.volume import Volume,save_volume,orientations,workspace_points,allowed_orientations,TravelField,sector_penalty,qmul
+from MUR.mur_base_selector.mur_base_selector.core import Grid
 
 
 class VolumeTests(unittest.TestCase):

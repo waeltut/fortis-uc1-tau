@@ -1,11 +1,17 @@
 <?xml version="1.0"?>
 <package format="3">
   <name>mur_base_selector</name>
-  <version>0.5.4</version>
+  <version>1.0.0</version>
   <description>Sampled workspace volume selection with an offline MoveIt builder and Nav2 validation.</description>
   <maintainer email="maintainers@example.com">MUR maintainers</maintainer>
   <license>Apache-2.0</license>
-  <buildtool_depend>ament_python</buildtool_depend>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>ament_cmake_python</buildtool_depend>
+  <build_depend>python3-dev</build_depend>
+  <depend>pybind11_vendor</depend><depend>rclcpp</depend>
+  <depend>moveit_core</depend><depend>moveit_ros_planning</depend><depend>yaml-cpp</depend>
+  <test_depend>ament_cmake_pytest</test_depend><test_depend>ament_cmake_gtest</test_depend>
+  <test_depend>urdf</test_depend><test_depend>srdfdom</test_depend>
   <exec_depend>rclpy</exec_depend>
   <exec_depend>rcl_interfaces</exec_depend>
   <exec_depend>action_msgs</exec_depend>
@@ -18,12 +24,12 @@
   <exec_depend>nav2_msgs</exec_depend>
   <exec_depend>tf2_ros_py</exec_depend>
   <exec_depend>visualization_msgs</exec_depend>
-  <exec_depend>mur_reachability</exec_depend>
+  <depend>mur_base_selector_interfaces</depend>
   <exec_depend>python3-numpy</exec_depend>
   <exec_depend>python3-yaml</exec_depend>
   <exec_depend>ament_index_python</exec_depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
   <test_depend>python3-pytest</test_depend>
-  <export><build_type>ament_python</build_type></export>
+  <export><build_type>ament_cmake</build_type></export>
 </package>

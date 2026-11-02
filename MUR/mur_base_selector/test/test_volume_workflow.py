@@ -7,12 +7,12 @@ import types
 from types import SimpleNamespace as NS
 import unittest
 import numpy as np
-import test_workflow as transport
-from mur_base_selector.core import Grid
+import MUR.mur_base_selector.test.test_workflow as transport
+from MUR.mur_base_selector.mur_base_selector.core import Grid
 sys.modules['mur_base_selector.navigation']=transport.m
 path=Path(__file__).parents[1]/'mur_base_selector'/'volume_node.py'
 tree=ast.parse(path.read_text())
-blocked=('rclpy','rcl_interfaces','std_msgs','nav_msgs','visualization_msgs')
+blocked=('rclpy','rcl_interfaces','std_msgs','nav_msgs','visualization_msgs','mur_base_selector_interfaces')
 tree.body=[n for n in tree.body if not (isinstance(n,ast.ImportFrom) and n.module and n.module.split('.')[0] in blocked) and not (isinstance(n,ast.Import) and any(a.name in blocked for a in n.names))]
 m=types.ModuleType('volume_workflow');m.__package__='mur_base_selector';sys.modules[m.__name__]=m
 m.__dict__.update(rclpy=NS(ok=lambda:True),String=transport.Message,Bool=transport.Message,NavPath=transport.Message,SetParametersResult=transport.Message)
@@ -20,7 +20,7 @@ exec(compile(tree,str(path),'exec'),m.__dict__)
 
 
 def node(rows=None):
-    n=transport.node();n.__class__=m.VolumeSelector;n.cfg.update(m.DEFAULTS);n.cfg['target_feasible_paths']=3;n.cfg['max_path_checks']=8
+    n=transport.node();n.__class__=m.VolumeSelector;n.cfg.update(m.DEFAULTS);n.cfg.update(left_preferred_distance=.65,right_preferred_distance=.65,left_facing_min_deg=0.,left_facing_max_deg=60.,right_facing_min_deg=-60.,right_facing_max_deg=0.);n.cfg['target_feasible_paths']=3;n.cfg['max_path_checks']=8
     n.publish_target=lambda:None;n.check_model=lambda *a:None;n.cache_context=lambda:None
     n.lookup=lambda *a:NS(transform=NS(translation=NS(x=0.,y=0.,z=0.),rotation=NS(x=0.,y=0.,z=0.,w=1.)))
     grid=Grid(np.zeros((50,50)),50,50,.2,(-5,-5,0))

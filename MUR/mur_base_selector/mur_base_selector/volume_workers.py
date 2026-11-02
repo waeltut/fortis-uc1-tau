@@ -9,17 +9,17 @@ import numpy as np
 
 def generate_parallel(engines, points, quats, allowed, mount, cfg, masks, completed,
                       save, report, workers=2, stop=None):
-    """One task per arm, with bounded result buffering and atomic voxel commits.
+    """One task per configured arm, with bounded result buffering and atomic voxel commits.
 
-    engines must be independent native model/scene owners for workers=2. Native
+    engines must be independent native model/scene owners for parallel workers. Native
     evaluate_offline releases the GIL. No worker mutates masks/completed or files.
     On interrupt/error, uncommitted voxels stay incomplete and can be recomputed.
     """
-    if workers not in (1,2):raise ValueError('workers must be 1 or 2')
-    if len(engines)!=2 or (workers==2 and engines[0] is engines[1]):
-        raise ValueError('Two-worker mode requires independent arm engines')
+    if workers < 1 or workers > len(engines):raise ValueError('workers must be between 1 and arm count')
+    if len(engines)!=len(completed) or (workers>1 and len(set(map(id,engines)))!=len(engines)):
+        raise ValueError('Parallel mode requires independent arm engines')
     stop=stop if stop is not None else threading.Event()
-    pending=[np.flatnonzero(~completed[a]).tolist() for a in range(2)]
+    pending=[np.flatnonzero(~completed[a]).tolist() for a in range(len(engines))]
     results=Queue(maxsize=4)
 
     def run_arm(arm):
@@ -39,7 +39,7 @@ def generate_parallel(engines, points, quats, allowed, mount, cfg, masks, comple
     pool=ThreadPoolExecutor(max_workers=workers,thread_name_prefix='mur_volume_arm')
     futures=[];processed=0;started=time.monotonic()
     try:
-        futures=[pool.submit(run_arm,a) for a in range(2)]
+        futures=[pool.submit(run_arm,a) for a in range(len(engines))]
         while True:
             if stop.is_set():raise InterruptedError('Volume generation interrupted')
             for f in futures:

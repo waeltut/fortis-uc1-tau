@@ -45,17 +45,21 @@ public:
     meta["robot_description"]=node_->get_parameter("robot_description").as_string();
     meta["robot_description_semantic"]=node_->get_parameter("robot_description_semantic").as_string();
     meta["source_node"]=node_->source_;
-    for(unsigned a=0;a<2;++a){
-      meta["ignored_collision_links"][sides[a]]=node_->arm_links_[1-a];
-      meta["groups"][sides[a]]=node_->groups_[a];meta["tips"][sides[a]]=node_->tips_[a];
-      meta["arm_joints"][sides[a]]=node_->model_->getJointModelGroup(node_->groups_[a])->getVariableNames();
+    meta["arm_names"]=node_->names_;
+    for(unsigned a=0;a<node_->names_.size();++a){
+      std::vector<std::string> ignored;
+      for(unsigned b=0;b<node_->names_.size();++b) if(a!=b)
+        ignored.insert(ignored.end(),node_->arm_links_[b].begin(),node_->arm_links_[b].end());
+      meta["ignored_collision_links"][node_->names_[a]]=ignored;
+      meta["groups"][node_->names_[a]]=node_->groups_[a];meta["tips"][node_->names_[a]]=node_->tips_[a];
+      meta["arm_joints"][node_->names_[a]]=node_->model_->getJointModelGroup(node_->groups_[a])->getVariableNames();
     }
     meta["reachability_policy"]="self_body_ignore_other_arm_v1";
     return YAML::Dump(meta);
   }
   std::vector<bool> evaluate_offline(unsigned arm,const std::vector<std::array<double,7>>& poses,
       const std::array<double,7>& mount,double seconds,unsigned attempts){
-    if(!node_||arm>1||seconds<=0||!std::isfinite(seconds)||attempts<1||attempts>100)
+    if(!node_||arm>=node_->names_.size()||seconds<=0||!std::isfinite(seconds)||attempts<1||attempts>100)
       throw std::runtime_error("Invalid offline request");
     auto group=node_->model_->getJointModelGroup(node_->groups_[arm]);
     moveit::core::RobotState baseline(node_->model_);baseline.setToDefaultValues();baseline.update();const Eigen::Isometry3d inv=unpack(mount).inverse();
@@ -83,7 +87,7 @@ public:
     return result;
   }
 };
-PYBIND11_MODULE(mur_reachability_engine,m){
+PYBIND11_MODULE(mur_base_selector_engine,m){
   py::class_<EmbeddedEngine>(m,"Engine")
     .def(py::init<const std::string&,bool,const std::string&>(),py::arg("config"),py::arg("sim_time"),py::arg("node_name")="mur_kinematics",py::call_guard<py::gil_scoped_release>())
     .def("model_info",&EmbeddedEngine::model_info,py::call_guard<py::gil_scoped_release>())

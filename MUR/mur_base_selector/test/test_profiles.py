@@ -4,8 +4,8 @@ import tempfile
 from pathlib import Path
 import unittest
 import numpy as np
-from mur_base_selector.volume import Volume,save_volume
-from mur_base_selector.visual_data import voxel_layers
+from MUR.mur_base_selector.mur_base_selector.volume import Volume,save_volume
+from MUR.mur_base_selector.mur_base_selector.visual_data import voxel_layers
 
 
 def qyaw(degrees):

@@ -47,8 +47,7 @@ DEFAULTS = {
     'joint_states_topic': '/joint_states',
     'scan_topic': '/scan',
     'lifecycle_services': ['/planner_server/get_state', '/controller_server/get_state'],
-    'arm_joints': [f'{side}_{joint}_joint' for side in ('left', 'right')
-                   for joint in ('shoulder_pan', 'shoulder_lift', 'elbow', 'wrist_1', 'wrist_2', 'wrist_3')],
+    'arm_joints': ['auto'],
     'max_data_age': 3.0,
     'tf_timeout': 0.5,
     'footprint_padding': 0.02,
@@ -219,8 +218,8 @@ class BaseSelector(Node):
 
     def validate_config(self):
         c = self.cfg
-        if c['arm_mode'] not in ('left', 'right', 'either', 'both'):
-            raise ValueError('arm_mode must be left, right, either or both')
+        if not isinstance(c['arm_mode'],str) or not c['arm_mode']:
+            raise ValueError('arm_mode must be a nonempty name or mode')
         for k, v in c.items():
             if isinstance(v, (int, float)) and not isinstance(v, bool) and (not math.isfinite(v) or v < 0):
                 raise ValueError(f'{k} must be finite and non-negative')
@@ -317,7 +316,7 @@ class BaseSelector(Node):
         res.message = 'Cancellation requested; outstanding Nav2 planning must terminate before another query.'
         return res
 
-    def submit(self, target):
+    def submit(self, target, arm_mode=None, completion=None):
         with self.lock:
             if self.busy:
                 return False, 'Selector busy; cancel or wait. New target was NOT queued.'
@@ -334,11 +333,14 @@ class BaseSelector(Node):
                     raise ValueError('Non-finite target')
             except (ValueError, SelectionError) as e:
                 return False, str(e)
+            mode = arm_mode or self.cfg['arm_mode']
+            if hasattr(self, 'volume') and mode not in ('either', 'both', *self.volume.arm_names):
+                return False, 'Unknown arm: '+mode
             self.busy = True
             self.stop.clear()
             self.sequence += 1
             self.invalidate()
-            self.worker = threading.Thread(target=self.run, args=(copy.deepcopy(target),), daemon=True)
+            self.worker = threading.Thread(target=self.run, args=(copy.deepcopy(target), mode, completion), daemon=True)
             self.worker.start()
             return True, f'Selection {self.sequence} started'
 

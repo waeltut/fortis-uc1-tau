@@ -16,19 +16,7 @@ mur_base_selector:
     lifecycle_services:
     - /planner_server/get_state
     - /controller_server/get_state
-    arm_joints:
-    - left_shoulder_pan_joint
-    - left_shoulder_lift_joint
-    - left_elbow_joint
-    - left_wrist_1_joint
-    - left_wrist_2_joint
-    - left_wrist_3_joint
-    - right_shoulder_pan_joint
-    - right_shoulder_lift_joint
-    - right_elbow_joint
-    - right_wrist_1_joint
-    - right_wrist_2_joint
-    - right_wrist_3_joint
+    arm_joints: [auto]  # Derived from cached MoveIt group variable names.
     max_data_age: 3.0
     tf_timeout: 0.5
     footprint_padding: 0.02

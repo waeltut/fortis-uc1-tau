@@ -13,7 +13,7 @@ ROS `use_sim_time` is supplied by the launch argument (default false).
 | `fixed_frame` | `map` | Frame for anchored target, candidate poses and output paths. |
 | `base_frame` | `base_link` | Mobile-base frame; must match cached base_frame. |
 | `reachability_frame` | `odom` | Intermediate frame used only to explain TF age failures (usually odom). |
-| `arm_mode` | `either` | left, right, either (choose one), or both (independent evidence for both). Launch argument overrides YAML. |
+| `arm_mode` | `either` | A configured arm name, either (choose one), or both (independent evidence for all configured arms). Launch argument overrides YAML. |
 | `service_timeout` | `3.0` | Maximum service wait/call duration, seconds, also bounded by remaining query time. |
 | `planner_action` | `/compute_path_to_pose` | Nav2 ComputePathToPose action name. |
 | `planner_id` | `GridBased` | Planner plugin ID sent to Nav2. |
@@ -23,7 +23,7 @@ ROS `use_sim_time` is supplied by the launch argument (default false).
 | `joint_states_topic` | `/joint_states` | JointState stream used for freshness and movement checks. |
 | `scan_topic` | `/scan` | LaserScan stream used for freshness checks. |
 | `lifecycle_services` | `["/planner_server/get_state", "/controller_server/get_state"]` | GetState service names; all listed nodes must be active. |
-| `arm_joints` | `["left_shoulder_pan_joint", "left_shoulder_lift_joint", "left_elbow_joint", "left_wrist_1_joint", "left_wrist_2_joint", "left_wrist_3_joint", "right_shoulder_pan_joint", "right_shoulder_lift_joint", "right_elbow_joint", "right_wrist_1_joint", "right_wrist_2_joint", "right_wrist_3_joint"]` | Joint names required for current-state freshness and motion monitoring. |
+| `arm_joints` | `[auto]` | Derive monitored joints from cache group metadata. Explicit overrides must include all cached group joints. |
 | `max_data_age` | `3.0` | Maximum accepted sensor/state/costmap age, seconds. |
 | `tf_timeout` | `0.5` | Maximum TF lookup wait, seconds. |
 | `footprint_padding` | `0.02` | Extra polygon expansion, metres, applied to the received footprint. |
@@ -112,3 +112,7 @@ Online budgets, scoring, profiles and display parameters do not require new IK.
 Profiles can only narrow the cached orientation set. Increasing the workspace
 bounds/FOV beyond what was generated, changing the robot geometry/limits/TCP/mount,
 or changing offline sampling requires generating a matching cache.
+
+## Configured arm preferences
+
+For every configured `<name>`, use `<name>_preferred_distance`, `<name>_facing_min_deg` and `<name>_facing_max_deg`. Generic defaults are 0.65 m, -60° and +60°. The left/right values above describe the MUR profile; its YAML is authoritative. Restart after configuration changes. The service request `arm` overrides mode for that request only.

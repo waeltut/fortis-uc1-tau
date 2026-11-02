@@ -1,5 +1,6 @@
 """Read-only workspace and selection diagnostics for Lichtblick/RViz."""
 import json
+import colorsys
 import math
 import rclpy
 from rclpy.node import Node
@@ -32,15 +33,17 @@ class VolumeVisualizer(Node):
         for k,v in defaults.items():self.declare_parameter(k,v)
         self.volume=load_selector_volume(self.get_parameter('volume_file').value)
         self.frame=self.volume.meta['context']['base_frame']
+        self.colours={name:COLOURS.get(name,colorsys.hsv_to_rgb(i/max(1,len(self.volume.arm_names)),.8,1.)) for i,name in enumerate(self.volume.arm_names)}
+        self.colours['intersection']=COLOURS['intersection']
         qos=QoSProfile(depth=1,reliability=ReliabilityPolicy.RELIABLE,durability=DurabilityPolicy.TRANSIENT_LOCAL)
-        self.voxel_pubs={k:self.create_publisher(MarkerArray,'/base_selection/workspace/'+k,qos) for k in COLOURS}
+        self.voxel_pubs={k:self.create_publisher(MarkerArray,'/base_selection/workspace/'+k,qos) for k in self.colours}
         self.label_pub=self.create_publisher(MarkerArray,'/base_selection/workspace/labels',qos)
         self.candidate_pubs={k:self.create_publisher(MarkerArray,'/base_selection/'+k+'_candidates',qos) for k in ('cache','travel','shortlist')}
         self.diag_pub=self.create_publisher(MarkerArray,'/base_selection/diagnostic_labels',qos)
         self.subscription=self.create_subscription(String,'/base_selection/visualization_data',self.candidates,qos)
         self.last_settings=None;self.timer=self.create_timer(2.,self.voxels)
         self.voxels()
-        self.get_logger().info('Workspace loaded; visualisation only. Blue=left, orange=right, purple=intersection. Display parameters can change live.')
+        self.get_logger().info('Workspace loaded; visualisation only. Colours identify configured arms; purple=intersection. Display parameters can change live.')
 
     def voxels(self):
         settings=tuple(self.get_parameter(k).value for k in ('minimum_coverage','z_min','z_max','arm','max_voxels_per_arm','alpha','voxel_scale','show_voxels','profile_angle_deg'))
@@ -53,14 +56,14 @@ class VolumeVisualizer(Node):
         except ValueError as e:
             self.get_logger().error(str(e));self.last_settings=settings;return
         self.last_settings=settings
-        messages={k:[clear()] for k in COLOURS};lines=[]
+        messages={k:[clear()] for k in self.colours};lines=[]
         for name,points,coverage,total in layers:
             m=marker(self.frame,name,Marker.CUBE_LIST);m.frame_locked=True
             m.scale.x=m.scale.y=m.scale.z=float(self.volume.meta['generation']['voxel_size'])*scale
             m.color.a=float(alpha)
             for p,c in zip(points,coverage):
                 m.points.append(Point(x=float(p[0]),y=float(p[1]),z=float(p[2])))
-                rgb=COLOURS[name];brightness=.3+.7*float(c)
+                rgb=self.colours[name];brightness=.3+.7*float(c)
                 m.colors.append(ColorRGBA(r=rgb[0]*brightness,g=rgb[1]*brightness,b=rgb[2]*brightness,a=float(alpha)))
             messages[name].append(m);lines.append(f'{name}: {len(points)}/{total} voxels displayed')
         for name,pub in self.voxel_pubs.items():pub.publish(MarkerArray(markers=messages[name]))

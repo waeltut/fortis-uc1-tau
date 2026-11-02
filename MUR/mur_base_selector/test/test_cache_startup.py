@@ -2,8 +2,8 @@ import tempfile
 from pathlib import Path
 import unittest
 import numpy as np
-from mur_base_selector.cache_startup import CacheStartupError,load_selector_volume
-from mur_base_selector.volume import save_volume
+from MUR.mur_base_selector.mur_base_selector.cache_startup import CacheStartupError,load_selector_volume
+from MUR.mur_base_selector.mur_base_selector.volume import save_volume
 
 
 class StartupTests(unittest.TestCase):
@@ -40,7 +40,7 @@ class PolicyTests(unittest.TestCase):
     write=StartupTests.write
 
     def test_old_policy_rejected_for_selection_and_resume(self):
-        from mur_base_selector.volume import Volume
+        from MUR.mur_base_selector.mur_base_selector.volume import Volume
         import json
         self.write(True)
         with np.load(self.path,allow_pickle=False) as f:data={k:f[k] for k in f.files}
@@ -53,7 +53,7 @@ class PolicyTests(unittest.TestCase):
 
     def test_collision_free_policy_is_rejected(self):
         import json
-        from mur_base_selector.volume import Volume
+        from MUR.mur_base_selector.mur_base_selector.volume import Volume
         self.write(True)
         with np.load(self.path,allow_pickle=False) as f:data={k:f[k] for k in f.files}
         meta=json.loads(str(data['metadata']));meta['reachability_policy']='kinematic_only_v1'

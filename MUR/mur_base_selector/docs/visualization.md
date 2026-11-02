@@ -59,7 +59,7 @@ within two seconds and never change selector parameters or cache contents.
 | volume_file | ~/ros2_ws/src/MUR/mur_base_selector/config/dexterous_volume.npz | Loaded once at startup; restart viewer to change/reload file |
 | minimum_coverage | 0.9 | Minimum profile coverage, 0–1; 0 shows voxels with at least one successful allowed sample |
 | profile_angle_deg | -1.0 | -1 uses cached generation angle; otherwise >= cached angle and <180 |
-| arm | both | left, right, both (separate layers), or intersection |
+| arm | both | a configured arm name, both (separate layers), or intersection |
 | z_min | -10.0 | Lowest displayed height in cached base frame, metres |
 | z_max | 10.0 | Highest displayed height, metres; must be >= z_min |
 | alpha | 0.45 | Cube opacity, >0 and <=1 |
@@ -129,3 +129,5 @@ New targets clear the preceding stage snapshots. Snapshots persist for inspectio
 after a request and are not live navigation clearance. If checking fails before
 cache lookup, the labels remain at checking. Profile counts count per-arm evidence;
 in both-arm mode their sum can exceed the number of candidate base poses.
+
+For custom robots workspace topics are `/base_selection/workspace/<arm_name>`, plus `intersection`. The latter requires evidence from every configured arm. Colours for non-MUR names are assigned automatically.

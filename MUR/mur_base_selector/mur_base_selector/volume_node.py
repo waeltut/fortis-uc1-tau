@@ -18,6 +18,9 @@ from .volume import TravelField,working_score
 from .visual_data import candidate_snapshot
 from .cache_startup import DEFAULT_VOLUME_FILE,CacheStartupError,load_selector_volume
 from rclpy.logging import get_logger
+from rclpy.task import Future
+from mur_base_selector_interfaces.srv import SelectBase
+from .robot_config import monitored_joints
 
 DEFAULTS={
  'volume_file':DEFAULT_VOLUME_FILE,
@@ -32,9 +35,7 @@ DEFAULTS={
  'weight_navigation':1.0,'weight_destination_cost':2.0,
  'weight_working_distance':1.0,'weight_facing':0.5,
  'distance_scale':0.25,
- 'left_preferred_distance':0.65,'right_preferred_distance':0.65,'both_preferred_distance':0.65,
- 'left_facing_min_deg':0.0,'left_facing_max_deg':60.0,
- 'right_facing_min_deg':-60.0,'right_facing_max_deg':0.0,
+ 'both_preferred_distance':0.65,
  'both_facing_min_deg':-10.0,'both_facing_max_deg':10.0,
 }
 
@@ -47,8 +48,20 @@ class VolumeSelector(BaseSelector):
             for key,value in DEFAULTS.items():
                 self.declare_parameter(key,value);self.cfg[key]=self.get_parameter(key).value
             self.initializing_volume=False
-            self.validate_volume()
             self.volume=load_selector_volume(self.cfg['volume_file'])
+            if self.cfg['arm_mode'] not in ('either','both',*self.volume.arm_names):
+                raise ValueError('arm_mode does not identify a cached arm')
+            required=monitored_joints(self.volume.meta)
+            if self.cfg['arm_joints']==['auto']:
+                self.cfg['arm_joints']=required
+            elif not set(required).issubset(self.cfg['arm_joints']):
+                raise ValueError('arm_joints override must include all cached group joints')
+            for name in self.volume.arm_names:
+                for suffix,default in (('_preferred_distance',0.65),('_facing_min_deg',-60.0),('_facing_max_deg',60.0)):
+                    key=name+suffix
+                    if key not in self.cfg:
+                        self.declare_parameter(key,default);self.cfg[key]=self.get_parameter(key).value
+            self.validate_volume()
             self.volume.configure_profiles(self.cfg['orientation_profiles_deg'])
             if self.volume.meta['context']['base_frame']!=self.cfg['base_frame']:raise ValueError('Cache base_frame mismatch')
             generated=self.volume.meta['generation']
@@ -61,9 +74,32 @@ class VolumeSelector(BaseSelector):
             self.visualization_snapshot={}
             self.target_markers_pub=self.create_publisher(MarkerArray,'/base_selection/target_markers',qos)
             self.create_timer(1.0,self.publish_target)
+            self.selection_service=self.create_service(SelectBase,'/base_selection/select',self.select_service,callback_group=self.group)
             self.status('idle','Volume selector ready; zero online IK. Selection only; no motion commands.',cache_id=self.volume.meta['cache_id'])
         except Exception:
             self.tf_receiver.close();self.destroy_node();raise
+
+    async def select_service(self, request, response):
+        # Awaiting an rclpy Future yields the executor so Nav2/TF/subscriptions
+        # can progress. Each request owns its completion, including failures.
+        completion=Future()
+        accepted,message=self.submit(request.target,request.arm,completion)
+        if not accepted:
+            response.success=False;response.message=message
+            return response
+        outcome=await completion
+        response.success=outcome['success'];response.message=outcome['message']
+        response.request_id=outcome['request_id']
+        if response.success:
+            result=outcome['result']
+            response.navigation_goal=outcome['pose'];response.arm=result['arm']
+            names=self.volume.arm_names if result['arm']=='both' else [result['arm']]
+            context=self.volume.meta['context']
+            response.planning_groups=[context['groups'][name] for name in names]
+            response.tcp_frames=[context['tips'][name] for name in names]
+            response.score=result['score'];response.valid_for_seconds=result['valid_for_seconds']
+            response.diagnostics_json=json.dumps(result,allow_nan=False)
+        return response
 
     def visual_stage(self,stage,rows=None,goal=None,truncated=None):
         if not hasattr(self,'visualization_pub') or not self.cfg['publish_visualization_data']:return
@@ -106,7 +142,7 @@ class VolumeSelector(BaseSelector):
 
     def parameters_changed(self,params):
         if getattr(self,'initializing_volume',False):return SetParametersResult(successful=True)
-        if any(p.name in DEFAULTS for p in params):return SetParametersResult(successful=False,reason='Restart volume selector to change configuration')
+        if any(p.name in DEFAULTS or p.name in self.cfg for p in params):return SetParametersResult(successful=False,reason='Restart volume selector to change configuration')
         return super().parameters_changed(params)
 
     def validate_volume(self):
@@ -126,7 +162,8 @@ class VolumeSelector(BaseSelector):
         if c['max_height_error']<0 or not 0<=c['max_orientation_error_deg']<=90:raise ValueError('Invalid approximation tolerance')
         for k in ('weight_navigation','weight_destination_cost','weight_working_distance','weight_facing','travel_inflation_weight'):
             if c[k]<0:raise ValueError('Negative '+k)
-        for arm in ('left','right','both'):
+        for arm in (*self.volume.arm_names,'both'):
+            if not all(math.isfinite(c[arm+suffix]) for suffix in ('_preferred_distance','_facing_min_deg','_facing_max_deg')):raise ValueError('Nonfinite arm preference')
             if c[arm+'_preferred_distance']<=0 or not -180<=c[arm+'_facing_min_deg']<=c[arm+'_facing_max_deg']<=180:raise ValueError('Invalid arm preference')
 
     def remaining(self,deadline,limit):
@@ -159,9 +196,10 @@ class VolumeSelector(BaseSelector):
                 self.cfg['weight_destination_cost']*destination_cost+
                 working_score(distance,c.bearing,c.arm,self.cfg))
 
-    def run(self,target):
+    def run(self,target,arm_mode=None,completion=None):
         started=time.monotonic();deadline=started+self.cfg['selection_budget'];search_end=deadline-self.cfg['final_validation_reserve']
         timings={};candidates=[];feasible=[];paths=destinations=0
+        outcome={'success':False,'message':'Selection interrupted','request_id':self.sequence}
         try:
             self.status('checking','Checking robot state and Nav2; volume reachability uses no IK')
             frozen=self.transform_target(target,self.cfg['fixed_frame'])
@@ -175,7 +213,7 @@ class VolumeSelector(BaseSelector):
             p=frozen.pose.position;goal=[p.x,p.y,p.z,*quaternion(frozen.pose.orientation)]
             phase=time.monotonic()
             def checkpoint():self.remaining(search_end,self.cfg['selection_budget'])
-            rows=self.volume.query(goal,base.translation.z,self.cfg['yaw_bins'],self.cfg['minimum_orientation_coverage'],self.cfg['max_height_error'],self.cfg['max_orientation_error_deg'],self.cfg['front_fov_deg'],self.cfg['front_yaw_offset_deg'],self.cfg['arm_mode'],checkpoint,True)
+            rows=self.volume.query(goal,base.translation.z,self.cfg['yaw_bins'],self.cfg['minimum_orientation_coverage'],self.cfg['max_height_error'],self.cfg['max_orientation_error_deg'],self.cfg['front_fov_deg'],self.cfg['front_yaw_offset_deg'],arm_mode or self.cfg['arm_mode'],checkpoint,True)
             timings['lookup_seconds']=time.monotonic()-phase
             self.visual_stage('cache',rows)
             if not rows:raise SelectionError('No volume candidates under current coverage/orientation/height/FOV limits; not proof of unreachability')
@@ -250,11 +288,15 @@ class VolumeSelector(BaseSelector):
                 self.checkpoint();self.selection_deadline=time.monotonic()+self.cfg['selection_ttl'];self.selected_context=(start,joints)
                 self.result_pub.publish(String(data=json.dumps(result,allow_nan=False)));self.path_pub.publish(path);self.pose_pub.publish(pose);self.valid_pub.publish(Bool(data=True));self.publish_markers(candidates)
                 self.status('selected',f'{chosen.arm}: {chosen.length:.2f} m path; cached volume, zero online IK',**result)
+                outcome.update(success=True,message='Selected navigation pose',result=result,pose=pose)
         except Exception as e:
+            outcome.update(success=False,message=str(e))
             if rclpy.ok():
                 self.invalidate();self.publish_markers(candidates);self.status('cancelled' if isinstance(e,Cancelled) else 'failed',str(e),timings=timings,elapsed_seconds=time.monotonic()-started)
         finally:
-            with self.lock:self.busy=False
+            with self.lock:
+                self.busy=False
+                if completion is not None:completion.set_result(outcome)
 
 
 def main(args=None):

@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 import numpy as np
 from .core import angle, transform_points
+from .robot_config import arm_names
 
 
 def qmul(a, b):
@@ -81,10 +82,11 @@ class Volume:
             self.meta=json.loads(str(f['metadata']));self.points=f['points'];self.quats=f['quaternions']
             self.done=f['completed'].astype(bool)
             self.masks=np.unpackbits(f['masks'],axis=-1,count=len(self.quats),bitorder='little').astype(bool)
+        self.arm_names=arm_names(self.meta)
         n,k=len(self.points),len(self.quats)
         if self.meta.get('schema')!=2 or self.meta.get('reachability_policy')!='self_body_ignore_other_arm_v1':
             raise ValueError('Incompatible cache policy: regenerate a fresh self/body collision cache; previous-policy checkpoints cannot be resumed')
-        if self.points.shape!=(n,3) or self.quats.shape!=(k,4) or self.masks.shape!=(2,n,k) or self.done.shape!=(2,n):
+        if self.points.shape!=(n,3) or self.quats.shape!=(k,4) or self.masks.shape!=(len(self.arm_names),n,k) or self.done.shape!=(len(self.arm_names),n):
             raise ValueError('Invalid volume schema/shapes')
         if not n or not k or not np.isfinite(self.points).all() or not np.isfinite(self.quats).all() or not np.allclose(np.linalg.norm(self.quats,axis=1),1):
             raise ValueError('Invalid volume geometry')
@@ -118,6 +120,7 @@ class Volume:
 
 
     def query(self,target,base_z,yaw_bins,min_coverage,max_height_error,max_angle_deg,fov_deg,front_offset_deg,mode,checkpoint=lambda:None,include_profiles=False):
+        if mode not in ('either', 'both', *self.arm_names):raise ValueError('Unknown arm mode: '+mode)
         cfg=self.meta['generation']
         # A larger online FOV cannot recover voxels omitted at generation.
         if fov_deg>cfg['workspace_fov_deg']+1e-9 or abs(angle(math.radians(front_offset_deg-cfg['workspace_front_offset_deg'])))>1e-9:
@@ -144,10 +147,10 @@ class Volume:
             norms=np.linalg.norm(inward,axis=1)
             good &= (norms>1e-9)
             inward_dot=np.sum((-inward/np.maximum(norms[:,None],1e-12))*dirs,axis=1)
-            valid=np.zeros((2,len(height)),dtype=bool)
-            selected_angles=np.zeros((2,len(height)),dtype=float)
-            selected_coverage=np.zeros((2,len(height)),dtype=float)
-            selected_counts=np.zeros((2,len(height)),dtype=int)
+            valid=np.zeros((len(self.arm_names),len(height)),dtype=bool)
+            selected_angles=np.zeros((len(self.arm_names),len(height)),dtype=float)
+            selected_coverage=np.zeros((len(self.arm_names),len(height)),dtype=float)
+            selected_counts=np.zeros((len(self.arm_names),len(height)),dtype=int)
             # Broadest passing profile wins, but acceptance is the union of all profiles.
             for profile_angle in self.profile_angles:
                 profile=self.profile_cache[profile_angle]
@@ -165,13 +168,13 @@ class Volume:
             bx=p[0]-(cs*points[:,0]-sn*points[:,1]);by=p[1]-(sn*points[:,0]+cs*points[:,1])
             for j,idx in enumerate(height):
                 arms=['both'] if mode=='both' and valid[:,j].all() else []
-                if mode!='both':arms=[name for a,name in enumerate(('left','right')) if valid[a,j] and mode in ('either',name)]
+                if mode!='both':arms=[name for a,name in enumerate(self.arm_names) if valid[a,j] and mode in ('either',name)]
                 for arm in arms:
-                    arm_ids=(0,1) if arm=='both' else (int(arm=='right'),)
+                    arm_ids=range(len(self.arm_names)) if arm=='both' else (self.arm_names.index(arm),)
                     coverage=float(min(selected_coverage[a,j] for a in arm_ids))
                     row=((float(bx[j]),float(by[j]),yaw),arm,float(bearings[j]),coverage,float(abs(points[j,2]-(p[2]-base_z))),error)
                     if include_profiles:
-                        evidence={('left','right')[a]:{'min_inward_angle_deg':float(selected_angles[a,j]),'coverage':float(selected_coverage[a,j]),'allowed_samples':int(selected_counts[a,j])} for a in arm_ids}
+                        evidence={self.arm_names[a]:{'min_inward_angle_deg':float(selected_angles[a,j]),'coverage':float(selected_coverage[a,j]),'allowed_samples':int(selected_counts[a,j])} for a in arm_ids}
                         row+=(evidence,)
                     rows.append(row)
         return rows

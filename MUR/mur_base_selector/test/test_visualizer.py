@@ -6,7 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace as NS
 import unittest
 import numpy as np
-from mur_base_selector.visual_data import voxel_layers
+from MUR.mur_base_selector.mur_base_selector.visual_data import voxel_layers
 
 class Marker:
     DELETEALL=3;ADD=0;CUBE_LIST=6;LINE_LIST=5;TEXT_VIEW_FACING=9
@@ -26,7 +26,7 @@ exec(compile(tree,str(path),'exec'),ns)
 
 class VisualizerTests(unittest.TestCase):
     def node(self):
-        n=object.__new__(ns['VolumeVisualizer']);n.frame='base_link';n.last_settings=None
+        n=object.__new__(ns['VolumeVisualizer']);n.frame='base_link';n.last_settings=None;n.colours=dict(ns['COLOURS'])
         n.volume=NS(meta={'generation':{'voxel_size':.1,'min_inward_angle_deg':70.}},points=np.array([[.5,0,.8]]),coverage=np.array([[.95],[1.]]),done=np.ones((2,1),bool))
         n.volume.profile=lambda angle:{'coverage':n.volume.coverage}
         n.settings=dict(minimum_coverage=.9,z_min=-10.,z_max=10.,arm='both',max_voxels_per_arm=10,alpha=.45,voxel_scale=.85,show_voxels=True,profile_angle_deg=-1.0)

@@ -1,6 +1,7 @@
 """ROS-free display filtering; never changes selection or cache contents."""
 import math
 import numpy as np
+from .robot_config import arm_names
 
 
 def bounded_indices(size, limit):
@@ -10,13 +11,14 @@ def bounded_indices(size, limit):
 
 def voxel_layers(volume, minimum, z_min, z_max, arm, limit, profile_angle=None):
     if not 0<=minimum<=1 or z_min>z_max or limit<1:raise ValueError('Invalid voxel display limits')
-    if arm not in ('both','left','right','intersection'):raise ValueError('arm must be both, left, right or intersection')
+    available=getattr(volume,'arm_names',None) or arm_names(getattr(volume,'meta',{}))
+    if arm not in ('both','intersection',*available):raise ValueError('Unknown display arm')
     height=(volume.points[:,2]>=z_min)&(volume.points[:,2]<=z_max)
-    names=('intersection',) if arm=='intersection' else (('left','right') if arm=='both' else (arm,))
+    names=('intersection',) if arm=='intersection' else (available if arm=='both' else (arm,))
     coverage_array=volume.coverage if profile_angle is None else volume.profile(profile_angle)['coverage']
     layers=[]
     for name in names:
-        a=0 if name=='left' else 1
+        a=available.index(name) if name!='intersection' else 0
         coverage=coverage_array.min(axis=0) if name=='intersection' else coverage_array[a]
         done=volume.done.all(axis=0) if name=='intersection' else volume.done[a]
         ids=np.flatnonzero(height&done&(coverage>=minimum)&(coverage>0))
@@ -30,7 +32,7 @@ def candidate_snapshot(rows, limit):
     groups={};counts={'total':len(rows),'forward_30deg':0,'left':0,'right':0,'both':0}
     for row in rows:
         pose,arm,bearing,*_=row
-        counts[arm]+=1
+        counts[arm]=counts.get(arm,0)+1
         if abs(bearing)<=math.pi/6+1e-9:counts['forward_30deg']+=1
         sector=int((bearing+math.pi)/(math.pi/6))%12
         groups.setdefault((arm,sector),[]).append([*map(float,pose),arm,float(bearing)])

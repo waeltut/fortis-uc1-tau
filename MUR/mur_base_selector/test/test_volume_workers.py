@@ -2,7 +2,7 @@ import threading
 import time
 import unittest
 import numpy as np
-from mur_base_selector.volume_workers import generate_parallel
+from MUR.mur_base_selector.mur_base_selector.volume_workers import generate_parallel
 
 
 class Engine:

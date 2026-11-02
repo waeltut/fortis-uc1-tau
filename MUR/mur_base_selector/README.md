@@ -1,176 +1,125 @@
-# mur_base_selector
+# Mobile manipulation base selector
 
-Finds a base pose `(x, y, yaw)` for a requested TCP pose. It uses an offline sampled
-workspace cache, scores eligible base poses, and requests Nav2 paths for a bounded
-shortlist. It publishes the selected pose/path without executing motion.
+Given a stamped TCP target pose, choose a mobile-base pose and arm using a sampled dexterous-space cache, working-distance/facing preferences, costmaps and Nav2 path checks. The selector does not move the base or arms and performs no online IK.
 
-## Executables
+## Packages
 
-| Executable | ROS node | Purpose |
-| --- | --- | --- |
-| `base_selector` | `/mur_base_selector` | Online selection with zero IK calls |
-| `build_volume` | `/mur_volume_builder` plus native model nodes | Offline cache generation, two arm workers by default |
-| `volume_visualizer` | `/mur_volume_visualizer` | Read-only workspace and selection diagnostics |
+- `mur_base_selector`: offline MoveIt cache builder, online selector, visualizer and configuration. Includes the native C++ engine and Python nodes.
+- `mur_base_selector_interfaces`: the `SelectBase` service definition, so clients can depend on the interface without the MoveIt implementation.
 
-## Configuration
+The separate `mur_reachability` implementation package is no longer needed. Keeping interface generation separate avoids the ROS 2 Humble `rosidl_generate_interfaces` / `ament_python_install_package` build conflict.
 
-Files are under `~/ros2_ws/src/MUR/mur_base_selector/config/`:
+## Install
 
-- `volume_selector.yaml`: online scoring, budgets, interfaces and cache path.
-- `volume_generation.yaml`: offline sampling, orientation constraints and output path.
+Replace the old `mur_base_selector` source directory with this one. Move the old `mur_reachability` package outside `ros2_ws/src` and place `mur_base_selector_interfaces` beside the selector. Do not overlay new files on the old package: the build type is now `ament_cmake`.
 
-Native model settings are in
-`~/ros2_ws/src/MUR/mur_reachability/config/volume_engine.yaml`.
-
-Pass source configuration paths explicitly to use edits without rebuilding.
-Launch defaults otherwise use installed package-share YAML copies. Restart the
-selector after changing its parameters; it rejects live configuration changes.
-Viewer display parameters can change live. All YAML numbers use decimal points;
-angles explicitly ending in `_deg` are degrees, other angular tolerances are radians.
-
-[Full selector parameter reference](docs/selector_parameters.md)
-
-## Launch selector
-
-Prerequisites: complete cache, connected TF, fresh configured arm joint states,
-current published footprint, scan stream, active configured Nav2 lifecycle nodes,
-Nav2 costmap services and planner action, and the cache's MoveIt parameter source
-for model identity checks. Run one selector instance.
+In a fresh shell, source ROS Humble but do not source an old workspace overlay before rebuilding:
 
 ```bash
-source ~/ros2_ws/install/setup.bash
-ros2 launch mur_base_selector base_selector.launch.py \
-  selector_config:=$HOME/ros2_ws/src/MUR/mur_base_selector/config/volume_selector.yaml \
-  arm_mode:=either
+source /opt/ros/humble/setup.bash
+cd ~/ros2_ws
+# These are generated package-specific build/install directories, not source files.
+rm -rf build/mur_base_selector install/mur_base_selector
+rm -rf build/mur_reachability install/mur_reachability
+rosdep install --from-paths src --ignore-src -r -y
+colcon build --symlink-install --packages-up-to mur_base_selector
+source install/setup.bash
 ```
 
-Launch arguments: `selector_config` (YAML path), `arm_mode` (`left`, `right`,
-`either`, `both`; default `either`), `use_sim_time` (default `false`). The launch
-arm_mode argument overrides the YAML value. With the MUR driver's extra-launch
-list, the entry is `("mur_base_selector", "base_selector.launch.py", {})`.
+These cleanup commands assume the usual isolated install layout, not `--merge-install`. Existing launch calls using `mur_base_selector/base_selector.launch.py` keep working. Update any external package manifest depending on `mur_reachability` to depend on `mur_base_selector` instead.
 
-## Target input
+The supplied cache is unchanged and remains readable. Its robot description, semantic model and mount must still match the running robot. It is not a cache for other robots.
 
-`/base_selection/target` accepts `geometry_msgs/msg/PoseStamped`. Set a valid TF
-frame, finite XYZ and a unit quaternion. Zero timestamp uses the latest TF. The
-target is transformed and anchored into `fixed_frame` for that request. Targets
-received while busy are rejected, not queued.
+## Start
 
-Example at map `(2.5, 0, 0.8)` with TCP +X pointing downward:
+Start MoveIt, TF, joint states, scan input and active Nav2 planner/controller/costmap services first. Then:
+
+```bash
+ros2 launch mur_base_selector base_selector.launch.py
+```
+
+`selector_config` selects the online YAML. `arm_mode` defaults to `either` and overrides the YAML value; it can name an individual configured arm or `both`. `use_sim_time` must match the robot stack.
+
+## Request/response service
+
+```bash
+ros2 service call /base_selection/select mur_base_selector_interfaces/srv/SelectBase \
+  "{target: {header: {frame_id: map}, pose: {position: {x: 1.5, y: 0.2, z: 1.0}, orientation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0}}}, arm: either}"
+```
+
+Target coordinates are an example, not a prescribed robot motion. The target is a **full TCP pose**: orientation affects reachability. An omitted/zero quaternion is rejected. A zero timestamp requests the latest transform; a nonzero timestamp is honoured when a transform is needed. The target is then frozen in `fixed_frame`.
+
+Request `arm`:
+
+- Empty string: use the configured `arm_mode`.
+- `either`: select one configured arm according to score.
+- A configured name, e.g. `left`: restrict this request to that arm without changing topic behaviour or configuration.
+- `both`: require independent cache evidence for every configured arm at the same base pose. This is an intersection query, **not simultaneous multi-arm feasibility**.
+
+Response:
+
+| Field | Meaning |
+|---|---|
+| `success`, `message` | Success or an explicit failure/busy/cancellation explanation |
+| `request_id` | Accepted request sequence; rejected requests use zero |
+| `navigation_goal` | Selected `PoseStamped` in `fixed_frame`, ready for a separate Nav2 client |
+| `arm` | Selected configured name, or `both` for an intersection query |
+| `planning_groups`, `tcp_frames` | Corresponding MoveIt group(s) and TCP link(s) from cache metadata |
+| `score` | Lower is better; selection is bounded and not globally optimal |
+| `valid_for_seconds` | Validity horizon measured from selection, not receipt |
+| `diagnostics_json` | Same successful result metadata as the result topic |
+
+Only use goal/arm/score fields when `success` is true. The service waits for selection, rather than merely acknowledging submission. It uses the same validation and publications as topic requests. Concurrent requests are rejected, not queued. A service client timing out does not cancel server work: explicitly call `/base_selection/cancel` if needed. Budget, service and planner cancellation timeouts can make total response time exceed `selection_budget`; set client timeout with margin.
+
+For Python clients, import `SelectBase` from `mur_base_selector_interfaces.srv`, create a client and use `call_async`. Do not block a mutually exclusive callback that is also needed to receive its response.
+
+## Existing topic interface
 
 ```bash
 ros2 topic pub --once /base_selection/target geometry_msgs/msg/PoseStamped \
-'{header: {frame_id: map}, pose: {position: {x: 2.5, y: 0.0, z: 0.8}, orientation: {x: 0.0, y: 0.7071067811865476, z: 0.0, w: 0.7071067811865476}}}'
-```
-
-```bash
-ros2 topic pub /base_selection/target geometry_msgs/msg/PoseStamped \
-'{header: {frame_id: map}, pose: {position: {x: 1.4, y: 0.0, z: 1.2}, orientation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0}}}'
-```
-
-
-The selected arm's configured TCP link is the target. `both` asks for independent
-reachability evidence for each arm at the same target/base pose; it is not two
-independent target inputs or a simultaneous collision-free dual-arm plan.
-
-## Selection workflow
-
-1. Check current state, cache model/mount identity and Nav2 availability.
-2. Use the nearest cached height layer within tolerance. Enumerate base yaw bins
-   and inverse-project eligible TCP offsets into candidate base X/Y positions.
-3. Check requested direction, nearest successful orientation bit and coverage in
-   at least one configured profile (default 70/90/120 degrees).
-4. Build a shared global-costmap travel field for preliminary navigation scoring.
-5. Rank candidates by navigation, destination cost, working distance and facing;
-   deduplicate identical base poses and diversify the bounded shortlist.
-6. Check the current footprint at destinations. Request one Nav2 path per checked
-   candidate pose; check swept footprints along returned paths.
-7. Compare feasible candidates and revalidate against fresh costmaps. Publish a
-   selected result, or a failure explaining which limit/check prevented selection.
-
-A timeout or failed IK sample is not proof of physical unreachability. The search
-is best-of-checked under configured limits, not a global optimum. The cache is
-sampled endpoint evidence, not an executable arm trajectory. Later MoveIt motion
-planning must check the actual arm motion and environment.
-
-## Scoring and footprint checks
-
-Lower score is better. Navigation cost is normalised by `length_scale`, working
-distance uses squared deviation from the per-arm preferred distance divided by
-`distance_scale`, and facing uses squared angular deviation outside the per-arm
-zero-penalty sector. Increase `weight_facing` and narrow that sector to favour
-forward-facing base poses. Bearing zero means the target is ahead of the base
-(with `front_yaw_offset_deg=0`); positive bearings are left. It is independent of
-TCP roll/pitch/yaw.
-
-Footprint checks use the actual published polygon, transformed into the candidate
-pose, with additional `footprint_padding`. Lethal cells (254), disallowed unknown
-cells (255) and an uncovered global footprint reject a pose. Lower costs, including
-inflation value 253, contribute soft cost rather than footprint rejection. Nav2
-can apply its own planner constraints. Local-map overlap is checked where available;
-leaving the local map alone does not reject a global candidate.
-
-Arms can start anywhere, but arm/base motion during selection invalidates the query
-so footprint evidence is not silently reused after motion. No footprint reduction
-or arm retraction is requested.
-
-## Outputs
-
-Topics below use the `/base_selection/` prefix.
-
-| Suffix | ROS type | Contents |
-| --- | --- | --- |
-| `selected_pose` | `geometry_msgs/PoseStamped` | Selected base goal in fixed_frame; volatile, emitted on success |
-| `selected_path` | `nav_msgs/Path` | Validated candidate path; emptied on invalidation |
-| `selected_valid` | `std_msgs/Bool` | Current selection validity flag |
-| `result` | `std_msgs/String` | JSON: request ID, validity, selected arm/pose, score, path costs/length, profiles, cache ID, timings and counts |
-| `status` | `std_msgs/String` | JSON state/message and supplementary diagnostics |
-| `candidate_diagnostics` | `std_msgs/String` | JSON candidate IDs, arm, pose, state, score and detail |
-| `candidate_markers` | `visualization_msgs/MarkerArray` | Status-coloured shortlist arrows |
-| `target_markers` | `visualization_msgs/MarkerArray` | Requested TCP target and direction |
-| `visualization_data` | `std_msgs/String` | Bounded stage samples with exact counts for the viewer |
-
-All listed outputs except selected_pose are reliable/transient-local. A latched
-message may describe a past request: inspect request_id, valid and selected_valid.
-Validity expires after selection_ttl and is monitored for base/arm motion; it is
-not continuous path revalidation against every new obstacle.
-
-Result fields include `orientation_profiles` per arm (minimum inward angle,
-coverage, allowed sample count), `active_profile_angles_deg`, `volume_candidates`,
-`ranking_pool`, `destination_checks`, `path_checks`, `feasible_paths`,
-`travel_field_truncated`, `timings`, `elapsed_seconds` and `valid_for_seconds`.
-`online_ik_checks` is zero and `joint_solutions` is empty. `pose` is `[x,y,yaw]`.
-An invalidated result may contain only request_id and valid=false.
-
-```bash
-ros2 topic echo /base_selection/result --qos-durability transient_local
-ros2 topic echo /base_selection/candidate_diagnostics --qos-durability transient_local --once
-```
-
-A red candidate arrow means rejection, not necessarily destination collision.
-Inspect state: global_/local_ lethal_obstacle or unknown_space, path_ rejection,
-or planner failure. Grey=unexamined, orange=destination clear, green=path checked,
-cyan=selected. Arrows show base +X, not TCP direction.
-
-## Services and external interfaces
-
-```bash
+  '{header: {frame_id: map}, pose: {position: {x: 1.5, y: 0.2, z: 1.0}, orientation: {w: 1.0}}}'
 ros2 service call /base_selection/reselect std_srvs/srv/Trigger '{}'
 ros2 service call /base_selection/cancel std_srvs/srv/Trigger '{}'
 ```
 
-Reselect repeats the last anchored target. Cancel requests cancellation and clears
-validity; an outstanding planner action must terminate before another request.
-The selector calls the configured ComputePathToPose action, GetCostmap services,
-GetState lifecycle services and cached source node's GetParameters service. It
-subscribes to the configured PolygonStamped footprint, JointState and LaserScan
-streams, and TF. Scan is used for freshness checks; obstacles come from costmaps.
+`reselect` acknowledges asynchronous submission using the default arm mode and the last frozen target. It does not preserve a previous per-service arm override.
 
-## Cache and viewer
+| Output | Type / purpose |
+|---|---|
+| `/base_selection/selected_pose` | PoseStamped; selected navigation pose |
+| `/base_selection/result` | String JSON; arm, score and evidence |
+| `/base_selection/selected_valid` | Bool; validity, expiry or invalidation |
+| `/base_selection/selected_path` | nav_msgs/Path; checked planning path |
+| `/base_selection/status` | String JSON; progress/failure reason |
+| `/base_selection/candidate_diagnostics` | String JSON; candidate states |
+| `/base_selection/candidate_markers` | MarkerArray; candidates |
+| `/base_selection/target_markers` | MarkerArray; requested TCP target |
+| `/base_selection/visualization_data` | String JSON; visualization snapshots |
 
-- [Generate/resume the cache; sampling, profiles and collision policy](docs/cache_generation.md)
-- [Display voxels, height slices and candidate stages](docs/visualization.md)
+Service requests also publish these outputs. Avoid running a topic consumer that automatically navigates if the service caller also sends navigation goals; otherwise two coordinators could react to one selection.
 
-Missing/incomplete cache produces a concise message with a generation/resume
-command and exits. Incompatible or unreadable caches produce an error. No file is
-silently overwritten or regenerated.
+## Configure a robot
+
+See [robot_configuration.md](docs/robot_configuration.md) for a single-arm example, automatic model inputs, assumptions and cache rebuild rules. Your MUR settings remain in `config/volume_engine.yaml`, `config/volume_generation.yaml` and `config/volume_selector.yaml`.
+
+- [Cache generation](docs/cache_generation.md)
+- [Online parameters and scoring](docs/selector_parameters.md)
+- [Visualization](docs/visualization.md)
+
+## Scope of the result
+
+The cache checks sampled endpoint IK, joint bounds and SRDF self/body collisions offline. Other configured moving arm branches are ignored during each arm's offline check. Environment arm collisions, exact requested-pose IK and arm trajectory feasibility are **not checked** by selection. `both` does not certify combined collision-free arm motion. After navigation, transform the original TCP target using the actual base pose and ask MoveIt to plan with the current complete collision scene.
+
+The base is assumed planar and arms rigidly mounted relative to the cached reference frame. Mobile torso/lift configurations need separate caches or a more general model. Current base/arm motion and stale input cause rejection. Nav2 path validation uses the current padded footprint; maintain that posture during navigation or revalidate. Changes in the world can invalidate a returned pose before its TTL expires.
+
+## Verification
+
+```bash
+colcon test --packages-select mur_base_selector
+colcon test-result --verbose
+# Pure Python algorithm and transport-double suite, no ROS installation required:
+PYTHONPATH=src/MUR/mur_base_selector python3 -m unittest discover \
+  -s src/MUR/mur_base_selector/test -v
+```
+
+The archive was checked with the Python tests and the supplied cache. This editing environment has no ROS/MoveIt installation, so C++ compilation, generated service imports, DDS/executor integration and a live Nav2 query still require verification in the ROS Humble workspace. The tests using transport doubles do not substitute for those checks.

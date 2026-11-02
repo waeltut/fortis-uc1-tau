@@ -1,13 +1,12 @@
-# Offline model settings. Self/body collisions checked; opposite moving arm ignored.
+# Ordered arrays map cache axes to MoveIt groups and TCP links.
 /**:
   ros__parameters:
     source_node: /move_group
     reference_frame: mur
     base_frame: base_link
-    left_group: left_ur_manipulator
-    right_group: right_ur_manipulator
-    left_tip: left_tcp
-    right_tip: right_tcp
+    arm_names: [left, right]
+    arm_groups: [left_ur_manipulator, right_ur_manipulator]
+    arm_tips: [left_tcp, right_tcp]
     joint_limit_margin: 0.02
     verification_position_tolerance: 0.001
     verification_orientation_tolerance: 0.01

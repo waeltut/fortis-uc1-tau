@@ -8,6 +8,8 @@
 #include <Eigen/Geometry>
 #include <algorithm>
 #include <array>
+#include <set>
+#include <regex>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -20,7 +22,6 @@
 #include <vector>
 using Clock=std::chrono::steady_clock;
 using namespace std::chrono_literals;
-static const std::array<std::string,2> sides{"left","right"};
 namespace mr {
 inline std::string fingerprint(const std::string& text) {
   uint64_t hash=14695981039346656037ULL;
@@ -35,8 +36,16 @@ public:
   explicit OfflineModel(const rclcpp::NodeOptions& options):Node("mur_kinematics",options) {
     source_=param<std::string>("source_node","/move_group");
     frame_=param<std::string>("reference_frame","mur");base_=param<std::string>("base_frame","base_link");
-    groups_={param<std::string>("left_group","left_ur_manipulator"),param<std::string>("right_group","right_ur_manipulator")};
-    tips_={param<std::string>("left_tip","left_tcp"),param<std::string>("right_tip","right_tcp")};
+    names_=param<std::vector<std::string>>("arm_names", {"left","right"});
+    groups_=param<std::vector<std::string>>("arm_groups", {"left_ur_manipulator","right_ur_manipulator"});
+    tips_=param<std::vector<std::string>>("arm_tips", {"left_tcp","right_tcp"});
+    if(names_.empty()||names_.size()!=groups_.size()||names_.size()!=tips_.size())
+      throw std::runtime_error("arm_names/groups/tips must be nonempty arrays of equal length");
+    std::set<std::string> unique;
+    for(const auto& name:names_)
+      if(!std::regex_match(name,std::regex("[a-z][a-z0-9_]*"))||name=="both"||name=="either"||name=="intersection"||!unique.insert(name).second)
+        throw std::runtime_error("Arm names must be unique lowercase identifiers, excluding reserved modes");
+    arm_links_.resize(names_.size());arm_acm_.resize(names_.size());
     joint_margin_=param<double>("joint_limit_margin",.02);
     pos_tol_=param<double>("verification_position_tolerance",.001);
     rot_tol_=param<double>("verification_orientation_tolerance",.01);
@@ -60,7 +69,7 @@ public:
     if(!has_parameter("robot_description")||!has_parameter("robot_description_semantic"))throw std::runtime_error("Source node lacks URDF/SRDF parameters");
     loader_=std::make_shared<robot_model_loader::RobotModelLoader>(shared_from_this(),"robot_description",true);
     model_=loader_->getModel();if(!model_||!model_->hasLinkModel(frame_))throw std::runtime_error("reference_frame must exist in MoveIt URDF");
-    for(unsigned a=0;a<2;++a) {
+    for(unsigned a=0;a<names_.size();++a) {
       const auto* g=model_->getJointModelGroup(groups_[a]);
       if(!g||!model_->hasLinkModel(tips_[a])||g->getVariableCount()==0||g->getVariableCount()>32)throw std::runtime_error("Invalid arm group/TCP");
       if(!g->getSolverInstance())throw std::runtime_error("Missing IK plugin for "+groups_[a]);
@@ -74,19 +83,24 @@ public:
       if(!link)throw std::runtime_error("reference_frame is not an ancestor; use mur for your combined model");
     }
     collision_scene_=std::make_shared<planning_scene::PlanningScene>(model_);
-    for(unsigned a=0;a<2;++a) arm_links_[a]=mr::arm_branch(*model_,groups_[a]);
-    for(const auto& link:arm_links_[0])
-      if(std::find(arm_links_[1].begin(),arm_links_[1].end(),link)!=arm_links_[1].end())
-        throw std::runtime_error("Arm collision branches overlap: "+link);
-    for(unsigned a=0;a<2;++a) {
+    for(unsigned a=0;a<names_.size();++a) arm_links_[a]=mr::arm_branch(*model_,groups_[a]);
+    for(unsigned a=0;a<names_.size();++a) {
+      std::vector<std::string> ignored;
+      for(unsigned b=0;b<names_.size();++b) if(a!=b) {
+        for(const auto& link:arm_links_[b]) {
+          if(std::find(arm_links_[a].begin(),arm_links_[a].end(),link)!=arm_links_[a].end())
+            throw std::runtime_error("Arm collision branches overlap: "+link);
+          ignored.push_back(link);
+        }
+      }
       if(std::find(arm_links_[a].begin(),arm_links_[a].end(),tips_[a])==arm_links_[a].end())
         throw std::runtime_error("TCP is outside moving arm branch: "+tips_[a]);
-      arm_acm_[a]=mr::arm_collision_matrix(*collision_scene_,arm_links_[1-a]);
-      RCLCPP_INFO(get_logger(), "%s checks self/body collisions; ignoring %zu opposite-arm links",
-                  sides[a].c_str(),arm_links_[1-a].size());
+      arm_acm_[a]=mr::arm_collision_matrix(*collision_scene_,ignored);
+      RCLCPP_INFO(get_logger(), "%s checks self/body collisions; ignoring %zu other-arm links",
+                  names_[a].c_str(),ignored.size());
     }
-    model_record_=provenance.str();provenance<<std::setprecision(17)<<frame_<<'\n'<<joint_margin_<<'\n'<<pos_tol_<<'\n'<<rot_tol_<<'\n'<<"self_body_ignore_other_arm_v1\n";
-    for(unsigned a=0;a<2;++a)provenance<<groups_[a]<<'\n'<<tips_[a]<<'\n';
+    model_record_=provenance.str();provenance<<std::setprecision(17)<<frame_<<'\n'<<base_<<'\n'<<joint_margin_<<'\n'<<pos_tol_<<'\n'<<rot_tol_<<'\n'<<"self_body_ignore_other_arm_v1\n";
+    for(unsigned a=0;a<names_.size();++a)provenance<<names_[a]<<'\n'<<groups_[a]<<'\n'<<tips_[a]<<'\n';
     fingerprint_=mr::fingerprint(provenance.str());
   }
 private:
@@ -105,11 +119,11 @@ private:
     return !result.collision;
   }
   std::string source_,frame_,base_,fingerprint_,model_record_;
-  std::array<std::string,2> groups_,tips_;
+  std::vector<std::string> names_,groups_,tips_;
   double joint_margin_,pos_tol_,rot_tol_;
   std::shared_ptr<robot_model_loader::RobotModelLoader> loader_;
   moveit::core::RobotModelPtr model_;
   std::shared_ptr<planning_scene::PlanningScene> collision_scene_;
-  std::array<std::vector<std::string>,2> arm_links_;
-  std::array<collision_detection::AllowedCollisionMatrix,2> arm_acm_;
+  std::vector<std::vector<std::string>> arm_links_;
+  std::vector<collision_detection::AllowedCollisionMatrix> arm_acm_;
 };

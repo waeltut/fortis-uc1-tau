@@ -14,7 +14,7 @@ TF. Live arm joint positions and a planning-scene service are not required.
 ```bash
 ros2 run mur_base_selector build_volume \
   --config ~/ros2_ws/src/MUR/mur_base_selector/config/volume_generation.yaml \
-  --engine-config ~/ros2_ws/src/MUR/mur_reachability/config/volume_engine.yaml \
+  --engine-config ~/ros2_ws/src/MUR/mur_base_selector/config/volume_engine.yaml \
   --workers 2
 ```
 
@@ -24,7 +24,7 @@ The pathname is excluded from generation identity, so a checkpoint can be moved.
 Set the same file in the selector and viewer. The file is read directly from its
 configured path and is not installed/copied automatically by colcon.
 
-Two workers own independent native models, solvers and collision scenes; one
+Parallel workers own independent native models, solvers and collision scenes; one
 writer commits complete arm/voxels and saves checkpoints. No motion is commanded.
 A failed bounded IK solve is unavailable evidence, not proof of unreachability.
 
@@ -57,7 +57,7 @@ PYTHON
 | `--config` | Installed volume_generation.yaml | Offline sampling configuration; use a source path to avoid rebuilding after edits |
 | `--engine-config` | Installed volume_engine.yaml | Native model/group/TCP/tolerance configuration |
 | `--output` | volume_file from generation YAML | Override cache output path |
-| `--workers` | 2 | 1 or 2; independent arm workers |
+| `--workers` | 2 | Positive maximum, capped at configured arm count |
 | `--resume` | Off | Load and continue a compatible checkpoint |
 | `--use-sim-time` | Off | Use simulation ROS time |
 | `--estimate-only` | Off | Print grid/orientation/check counts without starting ROS/IK |
@@ -80,24 +80,23 @@ Coordinates are relative to the cached base frame, normally base_link.
 | inward_reference | horizontal | horizontal removes Z from the inward ray; spatial uses the full 3-D ray |
 | ik_timeout | 0.01 | Timeout per native IK attempt, seconds |
 | attempts | 3 | Bounded attempts per pose, 1–100; warm/default seed then random retries |
-| save_every_voxels | 10 | Save after this many committed arm/voxels across both workers |
+| save_every_voxels | 10 | Save after this many committed arm/voxels across all workers |
 
 Smaller voxels and orientation steps increase offline cost substantially. All
 sampling settings participate in checkpoint compatibility; keep them unchanged
-when resuming. Completion means both arm/voxel counters finish.
+when resuming. Completion means all arm/voxel counters finish.
 
 ## Collision policy
 
 Each arm is checked against itself and the remaining URDF geometry, including
-body, fixed mounts and its own hand/tool descendants. Only the opposite moving
-arm branch and its downstream hand/tool are ignored. Existing SRDF disabled
+body, fixed mounts and its own hand/tool descendants. Other configured moving arm branches and their downstream hands/tools are ignored. Existing SRDF disabled
 collision pairs remain allowed. The branch begins at the first active arm joint's
 child link; fixed parent mounts remain obstacles. Overlapping branches are rejected.
 
 Non-IK joints such as fingers use model-default positions. Runtime attached
 objects and world obstacles are not imported. Consequently, the cache is not a
 certificate for every finger shape, runtime payload, environment or trajectory.
-The other arm's live posture never affects generation or resume.
+Other arms' live postures never affects generation or resume.
 
 ## Derived online profiles
 
@@ -116,3 +115,5 @@ With the horizontal inward ray, a downward TCP direction is at 90 degrees, so it
 can use 70/90 but not 120. Position FOV is independent of TCP direction. Coverage
 is a fraction of sampled orientations, not a uniform solid-angle probability or
 a guarantee for every continuous pose between samples.
+
+For other robots use the ordered arm arrays in `volume_engine.yaml`; see [robot configuration](robot_configuration.md). `--workers` is a positive maximum, capped at configured arm count. Native model changes invalidate old resumable fingerprints; completed legacy caches remain readable.
