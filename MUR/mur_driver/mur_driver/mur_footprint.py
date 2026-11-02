@@ -1,16 +1,26 @@
 #!/usr/bin/env python3
-"""Conservative URDF collision-envelope footprint for ROS 2 Humble."""
+"""Conservative URDF collision-envelope footprint for ROS 2 Humble.
+
+Low-latency diagnostic edition: a dedicated TF listener thread plus a
+single-pass shortcut when all latest collision-link transforms are exactly
+time-aligned. All original collision geometry and freshness checks preserved.
+"""
+
 import itertools
+import json
 import math
 from pathlib import Path
+import threading
 import time
 import xml.etree.ElementTree as ET
-
 import numpy as np
 import rclpy
 from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import Point32, Polygon, PolygonStamped
 from rclpy.node import Node
+from rclpy.executors import SingleThreadedExecutor, ExternalShutdownException
+from rclpy.duration import Duration
+from rclpy.parameter import Parameter
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from rclpy.time import Time
 from std_msgs.msg import Bool, String
@@ -100,6 +110,7 @@ def parse_description(xml, required_links):
 
 def convex_hull(points):
     pts = sorted(set(map(tuple, np.asarray(points, dtype=float))))
+
     def cross(o, a, b):
         return (a[0]-o[0])*(b[1]-o[1]) - (a[1]-o[1])*(b[0]-o[0])
     lower, upper = [], []
@@ -130,7 +141,42 @@ def project_points(points, transform):
     return (points @ rot.T + [t.x, t.y, t.z])[:, :2]
 
 
+class DedicatedTfReceiver:
+    """Keep /tf reception off the expensive footprint calculation executor.
+
+    Owns a distinct ROS node, executor and thread. Never spin a ROS node in
+    two executors. Buffer accesses are supported from the footprint thread.
+    """
+
+    def __init__(self, owner):
+        use_sim_time = (bool(owner.get_parameter('use_sim_time').value)
+                        if owner.has_parameter('use_sim_time') else False)
+        self.node = Node(
+            owner.get_name() + '_tf_listener', namespace=owner.get_namespace(),
+            context=owner.context, use_global_arguments=False,
+            parameter_overrides=[Parameter('use_sim_time', value=use_sim_time)])
+        self.buffer = Buffer(cache_time=Duration(seconds=10.0), node=self.node)
+        self.listener = TransformListener(self.buffer, self.node)
+        self.executor = SingleThreadedExecutor(context=owner.context)
+        self.executor.add_node(self.node)
+        self.thread = threading.Thread(target=self.spin, name='mur_footprint_tf', daemon=True)
+        self.thread.start()
+
+    def spin(self):
+        try:
+            self.executor.spin()
+        except ExternalShutdownException:
+            pass
+
+    def close(self):
+        self.executor.shutdown()
+        self.thread.join()
+        self.listener.unregister()
+        self.node.destroy_node()
+
+
 class MurFootprint(Node):
+
     def __init__(self):
         super().__init__('mur_footprint')
         defaults = {
@@ -156,8 +202,12 @@ class MurFootprint(Node):
         self.models = None
         self.xml = None
         self.last_warning = -math.inf
-        self.buffer = Buffer()
-        self.listener = TransformListener(self.buffer, self)
+        self.update_counter = 0
+        self.diagnostics = self.create_publisher(String, '/mur/footprint_diagnostics', 10)
+        # TF reception runs on its own executor, rather than sharing this
+        # node's Python callback workload.
+        self.tf_receiver = DedicatedTfReceiver(self)
+        self.buffer = self.tf_receiver.buffer
         self.outputs = [self.create_publisher(Polygon, self.get_parameter(p).value, 1)
                         for p in ('local_footprint_topic', 'global_footprint_topic')]
         self.visual = self.create_publisher(PolygonStamped, self.get_parameter('visualization_topic').value, 1)
@@ -193,33 +243,94 @@ class MurFootprint(Node):
             self.get_logger().error(f'Cannot load footprint geometry: {exc}')
 
     def update(self):
+        # Diagnostics are sent for *every* rejected update, unlike throttled logs.
+        # Do not alter the footprint's safety checks or its published geometry.
+        started = time.monotonic()
+        self.update_counter += 1
+        stage = 'initialisation'
+        stamp_by_link = {}
+        common = None
+        sample = None
+        t_latest = None
+        t_sample = None
+        t_geometry = None
         try:
             if self.models is None:
                 raise ValueError('Waiting for a valid robot description containing base and both arms')
             latest = {}
-            stamps = []
+            # TF lookups occur at different instants. Collect the latest timestamp
+            # for every collision-bearing link, then use their common time below.
+            stamp_by_link = {}
+            stage = 'latest_tf_lookups'
             for link in self.models:
-                tf = self.buffer.lookup_transform(self.base, link, Time())
+                try:
+                    tf = self.buffer.lookup_transform(self.base, link, Time())
+                except Exception as exc:
+                    raise RuntimeError(
+                        f'Latest TF lookup {self.base} <- {link} failed: {exc}'
+                    ) from exc
                 latest[link] = tf
                 stamp = Time.from_msg(tf.header.stamp).nanoseconds
                 if stamp:  # A wholly static TF chain has stamp zero.
-                    stamps.append(stamp)
+                    stamp_by_link[link] = stamp
+            t_latest = time.monotonic()
             now = self.get_clock().now()
-            common = min(stamps) if stamps else now.nanoseconds
-            age = (now.nanoseconds-common)/1e9
+            common = min(stamp_by_link.values()) if stamp_by_link else now.nanoseconds
+            stage = 'initial_tf_age_check'
+            age = (now.nanoseconds - common) / 1e9
             if age > self.max_age or age < -0.1:
-                raise ValueError(f'TF data age {age:.3f} s outside allowed range')
+                # This identifies *which* arm/base link is holding back the
+                # common-time sample, not just the age of that sample.
+                oldest = sorted(
+                    ((now.nanoseconds - stamp) / 1e9, link)
+                    for link, stamp in stamp_by_link.items()
+                )[::-1]
+                details = ', '.join(
+                    f'{link}={delay:.3f}s' for delay, link in oldest[:5]
+                )
+                raise ValueError(
+                    f'TF data age {age:.3f} s outside allowed range '
+                    f'(max_tf_age={self.max_age:.3f}s; oldest links: {details}; '
+                    f'dynamic TF chains={len(stamp_by_link)}/{len(self.models)})'
+                )
             # Sample all moving links at a common time, avoiding mixed-time geometry.
             sample = Time(nanoseconds=common, clock_type=now.clock_type)
             projected = []
+            # tf2 Time() returns the latest *common* timestamp in each chain.
+            # If every collision-link chain shares precisely the same dynamic
+            # stamp, those lookups are already mutually time-aligned: a second
+            # set of 48 historic lookups is unnecessary. If even one chain
+            # differs, fall back to the original exact common-time method.
+            uniform_timestamp = all(value == common for value in stamp_by_link.values())
+            stage = 'aligned_latest_lookups' if uniform_timestamp else 'synchronised_tf_lookups'
             for link, points in self.models.items():
-                tf = self.buffer.lookup_transform(self.base, link, sample) if stamps else latest[link]
+                try:
+                    tf = (latest[link] if uniform_timestamp else
+                          self.buffer.lookup_transform(self.base, link, sample))
+                except Exception as exc:
+                    raise RuntimeError(
+                        f'Synchronised TF lookup {self.base} <- {link} '
+                        f'at {common / 1e9:.3f}s failed: {exc}'
+                    ) from exc
                 projected.append(project_points(points, tf.transform))
+            t_sample = time.monotonic()
+            stage = 'geometry_projection'
             hull = convex_hull(np.concatenate(projected))
             # Minkowski sum with a square: encloses a circular margin of this radius.
             if self.padding:
                 offsets = np.array(list(itertools.product([-self.padding, self.padding], repeat=2)))
                 hull = convex_hull((hull[:, None, :] + offsets).reshape(-1, 2))
+            # Recheck freshness at publication time; TF could be old if the
+            # geometry computation takes unusually long under load.
+            t_geometry = time.monotonic()
+            stage = 'final_tf_age_check'
+            published_age = (self.get_clock().now().nanoseconds - common) / 1e9
+            if published_age > self.max_age or published_age < -0.1:
+                raise ValueError(
+                    f'Footprint calculation exceeded TF age limit '
+                    f'(age={published_age:.3f}s, limit={self.max_age:.3f}s)'
+                )
+            stage = 'publication'
             polygon = Polygon(points=[Point32(x=float(x), y=float(y), z=0.0) for x, y in hull])
             for publisher in self.outputs:
                 publisher.publish(polygon)
@@ -230,8 +341,53 @@ class MurFootprint(Node):
             self.visual.publish(stamped)
             self.valid.publish(Bool(data=True))
         except Exception as exc:
+            # Snapshot actual failure time, not the probe's later receipt of Bool(False).
+            failure_ros_ns = self.get_clock().now().nanoseconds
+            end = time.monotonic()
+            oldest = sorted(
+                ((failure_ros_ns - stamp_ns) / 1e9, link)
+                for link, stamp_ns in stamp_by_link.items()
+            )[::-1]
+            watched = [link for _, link in oldest[:3]]
+            for arm_link in ('left_wrist_3_link', 'right_wrist_3_link'):
+                if self.models is not None and arm_link in self.models and arm_link not in watched:
+                    watched.append(arm_link)
+            # A *second* lookup tells us if the TF buffer caught up after the
+            # failed snapshot. No blocking, and never used to publish a footprint.
+            rechecked = {}
+            for link in watched:
+                try:
+                    new_tf = self.buffer.lookup_transform(self.base, link, Time())
+                    new_stamp_ns = Time.from_msg(new_tf.header.stamp).nanoseconds
+                    rechecked[link] = round((failure_ros_ns - new_stamp_ns) / 1e9, 3)
+                except Exception as lookup_exc:
+                    rechecked[link] = f'unavailable: {lookup_exc}'
+            diagnostic = {
+                'update': self.update_counter,
+                'status': 'failed',
+                'stage': stage,
+                'reason': str(exc),
+                'ros_time_s': round(failure_ros_ns / 1e9, 6),
+                'elapsed_ms': round(1000 * (end - started), 2),
+                'latest_lookup_ms': round(1000 * (t_latest - started), 2) if t_latest is not None else None,
+                'synchronised_lookup_ms': round(1000 * (t_sample - t_latest), 2) if t_sample is not None else None,
+                'geometry_ms': round(1000 * (t_geometry - t_sample), 2) if t_geometry is not None else None,
+                'sample_age_at_failure_s': round((failure_ros_ns - common) / 1e9, 3) if common is not None else None,
+                'oldest_snapshot_links': [
+                    {'link': link, 'age_s': round(age, 3)} for age, link in oldest[:8]
+                ],
+                'rechecked_age_s': rechecked,
+                'dynamic_links': len(stamp_by_link),
+                'collision_links': len(self.models) if self.models is not None else None,
+                'aligned_latest_lookups': bool(uniform_timestamp) if t_sample is not None else None,
+            }
+            self.diagnostics.publish(String(data=json.dumps(diagnostic, allow_nan=False)))
             self.valid.publish(Bool(data=False))
-            self.warn(f'Footprint not updated: {exc}')
+            self.warn(
+                f'Footprint not updated: {exc} '
+                f'(stage={stage}, elapsed={diagnostic["elapsed_ms"]:.1f}ms, '
+                f'recheck={rechecked})'
+            )
 
 
 def main(args=None):
@@ -239,11 +395,15 @@ def main(args=None):
     node = None
     try:
         node = MurFootprint()
+        # This executor runs the footprint calculations. The TF listener owns
+        # a separate node and executor; do not add the footprint node there.
         rclpy.spin(node)
     except KeyboardInterrupt:
         pass
     finally:
         if node is not None:
+            if hasattr(node, 'tf_receiver'):
+                node.tf_receiver.close()
             node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()
