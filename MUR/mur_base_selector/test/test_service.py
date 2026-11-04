@@ -5,8 +5,8 @@ import threading
 import unittest
 from types import SimpleNamespace as NS
 from unittest.mock import patch
-import MUR.mur_base_selector.test.test_workflow as transport
-import MUR.mur_base_selector.test.test_volume_workflow as workflow
+import test_workflow as transport
+import test_volume_workflow as workflow
 
 
 class Completion:

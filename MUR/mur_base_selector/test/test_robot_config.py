@@ -2,10 +2,10 @@ import tempfile
 from pathlib import Path
 import unittest
 import numpy as np
-from MUR.mur_base_selector.mur_base_selector.robot_config import arm_names,monitored_joints
-from MUR.mur_base_selector.mur_base_selector.volume import Volume,save_volume
-from MUR.mur_base_selector.mur_base_selector.volume_workers import generate_parallel
-from MUR.mur_base_selector.mur_base_selector.visual_data import voxel_layers,candidate_snapshot
+from mur_base_selector.robot_config import arm_names,monitored_joints
+from mur_base_selector.volume import Volume,save_volume
+from mur_base_selector.volume_workers import generate_parallel
+from mur_base_selector.visual_data import voxel_layers,candidate_snapshot
 
 
 class RobotConfigTests(unittest.TestCase):

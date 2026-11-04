@@ -105,6 +105,7 @@ See [robot_configuration.md](docs/robot_configuration.md) for a single-arm examp
 - [Cache generation](docs/cache_generation.md)
 - [Online parameters and scoring](docs/selector_parameters.md)
 - [Visualization](docs/visualization.md)
+- [On-demand OccupancyGrid score maps](docs/score_visualizer.md)
 
 ## Scope of the result
 

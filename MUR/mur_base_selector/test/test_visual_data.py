@@ -1,7 +1,7 @@
 import unittest
 from types import SimpleNamespace
 import numpy as np
-from MUR.mur_base_selector.mur_base_selector.visual_data import voxel_layers,candidate_snapshot
+from mur_base_selector.visual_data import voxel_layers,candidate_snapshot
 
 class VisualDataTests(unittest.TestCase):
     def volume(self):

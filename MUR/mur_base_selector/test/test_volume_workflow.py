@@ -7,8 +7,8 @@ import types
 from types import SimpleNamespace as NS
 import unittest
 import numpy as np
-import MUR.mur_base_selector.test.test_workflow as transport
-from MUR.mur_base_selector.mur_base_selector.core import Grid
+import test_workflow as transport
+from mur_base_selector.core import Grid
 sys.modules['mur_base_selector.navigation']=transport.m
 path=Path(__file__).parents[1]/'mur_base_selector'/'volume_node.py'
 tree=ast.parse(path.read_text())

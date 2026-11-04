@@ -6,7 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace as NS
 import unittest
 import numpy as np
-from MUR.mur_base_selector.mur_base_selector.visual_data import voxel_layers
+from mur_base_selector.visual_data import voxel_layers
 
 class Marker:
     DELETEALL=3;ADD=0;CUBE_LIST=6;LINE_LIST=5;TEXT_VIEW_FACING=9

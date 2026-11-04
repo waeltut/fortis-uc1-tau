@@ -23,7 +23,7 @@ ament_python_install_package(${PROJECT_NAME})
 # PROGRAMS can link directly to those non-executable files. Prepare executable
 # copies in the build tree so installation does not rely on source permissions.
 file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/launchers")
-foreach(launcher base_selector build_volume volume_visualizer)
+foreach(launcher base_selector build_volume volume_visualizer score_visualizer)
   set(launcher_path "${CMAKE_CURRENT_BINARY_DIR}/launchers/${launcher}")
   configure_file("${CMAKE_CURRENT_SOURCE_DIR}/scripts/${launcher}" "${launcher_path}" COPYONLY)
   file(CHMOD "${launcher_path}" PERMISSIONS

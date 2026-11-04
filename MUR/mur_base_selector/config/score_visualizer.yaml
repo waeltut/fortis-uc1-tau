@@ -1,0 +1,16 @@
+# Separate, explicitly triggered diagnostics. Does not affect normal selection.
+mur_score_visualizer:
+  ros__parameters:
+    diagnostic.mode: fast
+    diagnostic.grid_resolution: 0.10
+    # Fixed scale shared by total and weighted component maps: 0 -> 0, this -> 100.
+    diagnostic.score_max: 10.0
+    diagnostic.max_cells: 1000000
+    diagnostic.max_markers: 1500
+    diagnostic.calculation_budget: 60.0
+    diagnostic.travel_budget: 15.0
+    diagnostic.max_detailed_candidates: 200
+    # Heading is in fixed_frame, not relative to the target. Filters yaw bins.
+    diagnostic.heading_filter: false
+    diagnostic.heading_deg: 0.0
+    diagnostic.heading_tolerance_deg: 7.5

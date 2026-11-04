@@ -131,3 +131,7 @@ cache lookup, the labels remain at checking. Profile counts count per-arm eviden
 in both-arm mode their sum can exceed the number of candidate base poses.
 
 For custom robots workspace topics are `/base_selection/workspace/<arm_name>`, plus `intersection`. The latter requires evidence from every configured arm. Colours for non-MUR names are assigned automatically.
+
+## Score maps
+
+For explicitly triggered OccupancyGrid layers showing total score and individual contributions, use the separate [score visualizer](score_visualizer.md). It is not started by the normal selector and never publishes actionable selections.
