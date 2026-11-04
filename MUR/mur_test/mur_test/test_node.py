@@ -1,6 +1,6 @@
-"""MUR test: Nav2 -> actual base pose -> selected-arm MoveIt commander topic.
+"""MUR test: Nav2 -> actual base pose -> selected-arm MoveArms action.
 
-MoveIt planning and execution belong to dual_arm_pose_commander, not this node.
+MoveIt planning and execution belong to dual_arm_commander, not this node.
 The selected arm is taken ONLY from mur_base_selector's matched JSON result.
 No IK, collision-matrix manipulation, or MoveGroup action is performed here.
 """
@@ -18,6 +18,8 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy
 from action_msgs.msg import GoalStatus
 from geometry_msgs.msg import PoseStamped
 from nav2_msgs.action import NavigateToPose
+from dual_arm_interfaces.action import MoveArms
+from .action_runner import run_action
 from std_msgs.msg import String
 from tf2_geometry_msgs import do_transform_pose
 from tf2_ros import Buffer, TransformException, TransformListener
@@ -34,8 +36,13 @@ class MurTest(Node):
         self.declare_parameter('base_goal_frame', 'map')
         self.declare_parameter('base_frame', 'base_link')
         self.declare_parameter('planning_frame', 'mur')
-        self.declare_parameter('left_goal_topic', '/left_arm/goal_pose')
-        self.declare_parameter('right_goal_topic', '/right_arm/goal_pose')
+        self.declare_parameter('commander_action', '/arms/move')
+        self.declare_parameter('arm_timeout', 180.0)
+        self.declare_parameter('cancel_timeout', 20.0)
+        self.declare_parameter('velocity_scaling', 0.1)
+        self.declare_parameter('acceleration_scaling', 0.1)
+        self.declare_parameter('plan_only', False)
+        self.declare_parameter('confirm_navigation', True)
         self.declare_parameter('navigation_timeout', 180.0)
         self.declare_parameter('interface_timeout', 15.0)
         self.declare_parameter('pose_wait_timeout', 30.0)
@@ -43,6 +50,15 @@ class MurTest(Node):
         self.declare_parameter('commander_wait_timeout', 5.0)
         self.declare_parameter('tf_timeout', 5.0)
 
+        self.motion_fault = None
+        for name in ('navigation_timeout', 'interface_timeout', 'pose_wait_timeout',
+                     'arm_selection_timeout', 'commander_wait_timeout', 'tf_timeout',
+                     'arm_timeout', 'cancel_timeout'):
+            if not math.isfinite(float(self.p(name))) or float(self.p(name)) <= 0:
+                raise ValueError(name + ' must be finite and positive')
+        for name in ('velocity_scaling', 'acceleration_scaling'):
+            if not 0.0 <= float(self.p(name)) <= 1.0:
+                raise ValueError(name + ' must be in [0, 1]')
         self.lock = threading.Lock()
         self.target = None
         self.selected = None
@@ -62,10 +78,7 @@ class MurTest(Node):
                 self.create_subscription(String, topic, self.on_diagnostics, qos)
 
         self.nav = ActionClient(self, NavigateToPose, self.p('navigation_action'))
-        self.arm_pubs = {
-            'left': self.create_publisher(PoseStamped, self.p('left_goal_topic'), qos),
-            'right': self.create_publisher(PoseStamped, self.p('right_goal_topic'), qos),
-        }
+        self.commander = ActionClient(self, MoveArms, self.p('commander_action'))
         self.get_logger().info('Ready: selector arm -> Nav2 -> latest map-to-mur TF -> MoveIt commander.')
         self.get_logger().info('Arm dispatch is automatic after successful navigation; no arm confirmation.')
 
@@ -164,14 +177,6 @@ class MurTest(Node):
             time.sleep(0.05)
         raise RuntimeError('No matching selector arm metadata for selected base pose; refusing to guess.')
 
-    def wait_future(self, future, timeout, label):
-        deadline = time.monotonic() + float(timeout)
-        while rclpy.ok() and not future.done() and time.monotonic() < deadline:
-            time.sleep(0.05)
-        if not future.done():
-            raise TimeoutError('%s timed out after %.1f s' % (label, timeout))
-        return future.result()
-
     def wait_for_selection(self):
         deadline = time.monotonic() + float(self.p('pose_wait_timeout'))
         while rclpy.ok() and time.monotonic() < deadline:
@@ -213,21 +218,30 @@ class MurTest(Node):
                 time.sleep(0.1)
         raise RuntimeError('Missing TF %s <- %s' % (frame, pose.header.frame_id))
 
-    def navigate(self, base_map):
+    def fault(self, message):
+        self.motion_fault = message
+        self.get_logger().error(message)
+
+    def run_motion(self, client, request, timeout, generation, feedback=None):
+        def stopped():
+            if not rclpy.ok():
+                return 'ROS shutdown'
+            with self.lock:
+                if generation != self.target_generation:
+                    return 'New TCP target received'
+            return None
+        self.check_snapshot(generation)
+        return run_action(client, request, float(self.p('interface_timeout')),
+                          float(timeout), float(self.p('cancel_timeout')),
+                          stopped, self.fault, feedback)
+
+    def navigate(self, base_map, generation):
         if not self.nav.wait_for_server(timeout_sec=float(self.p('interface_timeout'))):
             raise RuntimeError('Nav2 NavigateToPose action unavailable')
         request = NavigateToPose.Goal()
         request.pose = copy.deepcopy(base_map)
         request.pose.header.stamp = self.get_clock().now().to_msg()
-        handle = self.wait_future(self.nav.send_goal_async(request), self.p('interface_timeout'), 'Nav2 goal response')
-        if handle is None or not handle.accepted:
-            raise RuntimeError('Nav2 rejected the goal')
-        print('Navigation accepted; waiting for Nav2 to finish...')
-        try:
-            response = self.wait_future(handle.get_result_async(), self.p('navigation_timeout'), 'Navigation')
-        except (TimeoutError, KeyboardInterrupt):
-            handle.cancel_goal_async()
-            raise
+        response = self.run_motion(self.nav, request, self.p('navigation_timeout'), generation)
         if response.status != GoalStatus.STATUS_SUCCEEDED:
             raise RuntimeError('Nav2 ended with status=%d (arm goal not sent)' % response.status)
         self.get_logger().info('Nav2 succeeded.')
@@ -246,24 +260,40 @@ class MurTest(Node):
         # Deliberately do not reject a successful Nav2 arrival based on XY/yaw error.
         # The TCP target is transformed from the actual robot pose below.
 
-    def publish_commander_goal(self, arm, tcp_map):
-        pub = self.arm_pubs[arm]
-        deadline = time.monotonic() + float(self.p('commander_wait_timeout'))
-        while rclpy.ok() and pub.get_subscription_count() < 1 and time.monotonic() < deadline:
-            time.sleep(0.1)
-        if pub.get_subscription_count() < 1:
-            raise RuntimeError('No MoveIt commander subscriber on %s' % pub.topic_name)
-        goal = self.transform_to(tcp_map, str(self.p('planning_frame')))
-        goal.header.stamp = self.get_clock().now().to_msg()
-        p, q = goal.pose.position, goal.pose.orientation
-        self.get_logger().info('Dispatching %s TCP goal to %s in %s: '
-                               'xyz=(%.4f, %.4f, %.4f), xyzw=(%.5f, %.5f, %.5f, %.5f)' % (
-                                   arm.upper(), pub.topic_name, goal.header.frame_id,
-                                   p.x, p.y, p.z, q.x, q.y, q.z, q.w))
-        pub.publish(goal)
-        self.get_logger().info('Goal published to existing MoveIt commander. '
-                               'Commander is responsible for MoveIt planning, configured collision policy, '
-                               'and execution; topic delivery does not confirm motion completion.')
+    def execute_commander_goal(self, arm, tcp_map, generation):
+        if not self.commander.wait_for_server(timeout_sec=float(self.p('commander_wait_timeout'))):
+            raise RuntimeError('MoveArms action unavailable: %s' % self.p('commander_action'))
+        pose = self.transform_to(tcp_map, str(self.p('planning_frame')))
+        # MoveArms explicitly rejects nonzero timestamps on either target.
+        pose.header.stamp.sec = 0
+        pose.header.stamp.nanosec = 0
+        request = MoveArms.Goal()
+        request.goal_type = 'explicit'
+        request.mode = arm
+        request.target_type = 'pose'
+        setattr(request, arm + '_target', pose)
+        request.velocity_scaling = float(self.p('velocity_scaling'))
+        request.acceleration_scaling = float(self.p('acceleration_scaling'))
+        request.plan_only = bool(self.p('plan_only'))
+        self.get_logger().info('Dispatching %s TCP target in %s to %s (plan_only=%s)' % (
+            arm.upper(), pose.header.frame_id, self.p('commander_action'), request.plan_only))
+        response = self.run_motion(self.commander, request, self.p('arm_timeout'),
+                                   generation, self.on_arm_feedback)
+        result = response.result
+        detail = ('status=%d, error=%d, MoveIt=%d: %s; executed=%s, '
+                  'left_completed=%s, right_completed=%s' % (
+                      response.status, result.error_code, result.moveit_error_code,
+                      result.message, result.executed, result.left_completed, result.right_completed))
+        if response.status != GoalStatus.STATUS_SUCCEEDED or result.error_code != MoveArms.Result.OK:
+            raise RuntimeError('Arm action failed: ' + detail)
+        if not request.plan_only and (not result.executed or not getattr(result, arm + '_completed')):
+            raise RuntimeError('Arm action did not confirm selected-arm execution: ' + detail)
+        self.get_logger().info(('Arm plan ready: ' if request.plan_only else 'Arm motion completed: ') + detail)
+
+    def on_arm_feedback(self, message):
+        feedback = message.feedback
+        self.get_logger().info('Commander %s [%s]: %s' % (
+            feedback.stage, feedback.active_arms, feedback.detail))
 
     @staticmethod
     def confirm(question):
@@ -271,9 +301,10 @@ class MurTest(Node):
 
     def run_console(self):
         print('\n=== mur_test: Nav2 -> selected arm commander goal ===')
-        print('Nav confirmation is manual; arm goal publishes automatically after Nav2 success.')
+        print('Navigation confirmation: %s; arm plan_only: %s' % (
+            self.p('confirm_navigation'), self.p('plan_only')))
         print('Press Ctrl+C to exit.\n')
-        while rclpy.ok():
+        while rclpy.ok() and self.motion_fault is None:
             generation = None
             try:
                 generation, target, base = self.wait_for_selection()
@@ -284,7 +315,7 @@ class MurTest(Node):
                     target.pose.position.y, target.pose.position.z))
                 print('Selected base: %s (%.3f, %.3f)' % (
                     base.header.frame_id, base.pose.position.x, base.pose.position.y))
-                if not self.confirm('Navigate MiR to the selected base pose?'):
+                if self.p('confirm_navigation') and not self.confirm('Navigate MiR to the selected base pose?'):
                     print('Navigation skipped; waiting for a new target.')
                     self.discard(generation)
                     continue
@@ -294,11 +325,11 @@ class MurTest(Node):
                 tcp_map = self.transform_to(target, str(self.p('base_goal_frame')))
                 base_map = self.transform_to(base, str(self.p('base_goal_frame')))
                 self.check_snapshot(generation)
-                self.navigate(base_map)
+                self.navigate(base_map, generation)
                 self.check_snapshot(generation)
                 self.log_actual_arrival(base_map)
                 self.check_snapshot(generation)
-                self.publish_commander_goal(arm, tcp_map)
+                self.execute_commander_goal(arm, tcp_map, generation)
                 self.discard(generation)
             except (KeyboardInterrupt, EOFError):
                 break
