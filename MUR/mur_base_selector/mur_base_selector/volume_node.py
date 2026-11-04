@@ -1,5 +1,7 @@
 """Volume-only reachability selection. Never imports/constructs an IK engine."""
 import copy
+from decimal import Decimal, InvalidOperation
+from xml.etree import ElementTree as ET
 import json
 import math
 import time
@@ -40,6 +42,240 @@ DEFAULTS={
 }
 
 
+# The cache stores sampled IK feasibility and self/body collision checks.
+# A cleanup of ROS controller, visual or inertial data must not invalidate it.
+# Do not discard joint transforms/limits, collision shapes or mesh locations.
+_NUMERIC_ATTRIBUTES = {
+    'xyz', 'rpy', 'size', 'radius', 'length', 'scale', 'lower', 'upper',
+    'effort', 'velocity', 'acceleration', 'mass', 'ixx', 'ixy', 'ixz',
+    'iyy', 'iyz', 'izz', 'damping', 'friction', 'multiplier', 'offset',
+    'value', 'min_position', 'max_position', 'max_velocity',
+    'max_acceleration', 'max_jerk', 'mu1', 'mu2', 'kp', 'kd',
+}
+
+_UNORDERED_CHILDREN = {
+    'robot': frozenset({
+        'link', 'joint', 'material', 'transmission', 'ros2_control',
+        'gazebo', 'group', 'group_state', 'end_effector', 'virtual_joint',
+        'passive_joint', 'disable_collisions', 'enable_collisions',
+        'link_sphere_approximation',
+    }),
+    'link': frozenset({'visual', 'collision'}),
+    'group': frozenset({'joint', 'link', 'chain', 'group'}),
+    'group_state': frozenset({'joint'}),
+}
+
+
+def _effective_urdf_position_limits(joint):
+    """MoveIt 2 jointBoundsFromURDF(): clamp soft bounds to hard bounds.
+
+    The cached IK samples depend on effective *position* limits, not on
+    safety_controller gains. Fail closed for unfamiliar or invalid setups.
+    """
+    if joint.get('type') not in ('revolute', 'prismatic'):
+        return None
+    limit = joint.find('limit')
+    if limit is None or 'lower' not in limit.attrib or 'upper' not in limit.attrib:
+        return None
+    try:
+        lower = Decimal(limit.get('lower'))
+        upper = Decimal(limit.get('upper'))
+        if not (lower.is_finite() and upper.is_finite() and lower <= upper):
+            raise ValueError('invalid hard joint limits')
+        safety = joint.find('safety_controller')
+        if safety is not None:
+            # URDF safety fields default to 0.0 when unspecified.
+            # IMPORTANT: missing soft bounds are *not* equivalent to hard bounds.
+            soft_lower = Decimal(safety.get('soft_lower_limit', '0'))
+            soft_upper = Decimal(safety.get('soft_upper_limit', '0'))
+            if not (soft_lower.is_finite() and soft_upper.is_finite()):
+                raise ValueError('nonfinite soft joint limits')
+            lower = max(lower, soft_lower)
+            upper = min(upper, soft_upper)
+        if lower > upper:
+            raise ValueError('soft joint limits have no valid intersection')
+        return lower, upper
+    except InvalidOperation as exc:
+        raise ValueError(f'Invalid joint position bounds for {joint.get("name")}') from exc
+
+
+def _normalize_joint_position_limits(joint):
+    """Ignore a safety_controller only after preserving its MoveIt bounds.
+
+    For continuous/fixed/unknown or unbounded joints, retain the tag so
+    comparison rejects a modification rather than assuming it harmless.
+    """
+    safety = joint.find('safety_controller')
+    if safety is None:
+        return
+    bounds = _effective_urdf_position_limits(joint)
+    if bounds is None:
+        return
+    limit = joint.find('limit')
+    limit.set('lower', str(bounds[0]))
+    limit.set('upper', str(bounds[1]))
+    joint.remove(safety)
+
+
+def _reachability_xml(xml, parameter_name):
+    """Project expanded XML onto its IK and collision-relevant content.
+
+    Deliberately conservative about geometry: a mesh URI change is *not*
+    assumed safe because the new file could contain different geometry.
+    """
+    root = ET.fromstring(xml)
+    if root.tag != 'robot':
+        raise ValueError('Robot description does not have a <robot> root')
+
+    if parameter_name == 'robot_description':
+        for joint in root.findall('joint'):
+            _normalize_joint_position_limits(joint)
+
+        def prune(element):
+            for child in list(element):
+                if (child.tag in {'gazebo', 'ros2_control', 'transmission'} or
+                    (element.tag == 'robot' and child.tag == 'material') or
+                    (element.tag == 'link' and child.tag in {'visual', 'inertial'}) or
+                    (element.tag == 'joint' and child.tag == 'dynamics') or
+                    (element.tag == 'collision' and child.tag == 'material')):
+                    element.remove(child)
+                else:
+                    prune(child)
+
+            # URDF collision names are labels, not collision geometry.
+            if element.tag == 'collision':
+                element.attrib.pop('name', None)
+            # Position-limit bounds constrain sampled IK. Velocity/effort
+            # limits do not change the endpoint reachability mask.
+            if element.tag == 'limit':
+                for field in ('velocity', 'effort', 'acceleration', 'jerk'):
+                    element.attrib.pop(field, None)
+        prune(root)
+    elif parameter_name == 'robot_description_semantic':
+        for element in root.iter():
+            for child in list(element):
+                # Named group states only define start positions; the cache
+                # was explicitly generated without fixing arm posture.
+                if element.tag == 'robot' and child.tag == 'group_state':
+                    element.remove(child)
+            if element.tag in {'disable_collisions', 'enable_collisions'}:
+                # The reason is commentary; the disabled pair itself matters.
+                element.attrib.pop('reason', None)
+    else:
+        raise ValueError('Unsupported robot description parameter: '+parameter_name)
+    return root
+
+
+def _model_xml_signature(root):
+    """Stable signature insensitive to whitespace/order/numeric spelling."""
+    def signature(element):
+        attributes = dict(element.attrib)
+        if element.tag in ('disable_collisions', 'enable_collisions'):
+            if 'link1' in attributes and 'link2' in attributes:
+                attributes['link1'], attributes['link2'] = sorted(
+                    (attributes['link1'], attributes['link2']))
+
+        for key, value in attributes.items():
+            if key not in _NUMERIC_ATTRIBUTES:
+                continue
+            try:
+                numbers = [Decimal(part) for part in value.split()]
+                if numbers and all(number.is_finite() for number in numbers):
+                    attributes[key] = tuple(
+                        str(number.normalize()) if number else '0'
+                        for number in numbers
+                    )
+            except InvalidOperation:
+                pass
+
+        ordered, unordered = [], []
+        reorderable = _UNORDERED_CHILDREN.get(element.tag, frozenset())
+        for child in element:
+            item = signature(child)
+            (unordered if child.tag in reorderable else ordered).append(item)
+        return (
+            element.tag,
+            tuple(sorted(attributes.items())),
+            (element.text or '').strip(),
+            tuple(ordered),
+            tuple(sorted(unordered, key=repr)),
+        )
+    return signature(root)
+
+
+def _diff_model_signatures(old, new, max_diffs=5):
+    """Return human-readable, bounded paths to incompatible differences."""
+    differences = []
+
+    def label(item):
+        tag, pairs = item[0], dict(item[1])
+        if 'name' in pairs:
+            return f'{tag}[name={pairs["name"]}]'
+        if 'link1' in pairs and 'link2' in pairs:
+            return f'{tag}[{pairs["link1"]},{pairs["link2"]}]'
+        return tag
+
+    def children(item):
+        result, counters = {}, {}
+        for child in item[3] + item[4]:
+            name = label(child)
+            index = counters.get(name, 0)
+            counters[name] = index + 1
+            result[f'{name}#{index}'] = child
+        return result
+
+    def show(value):
+        rendered = repr(value)
+        return rendered if len(rendered) <= 140 else rendered[:137] + '...'
+
+    def descend(left, right, path):
+        if len(differences) >= max_diffs:
+            return
+        if left[0] != right[0]:
+            differences.append(f'{path}: tag {left[0]} -> {right[0]}')
+            return
+        old_attrs, new_attrs = dict(left[1]), dict(right[1])
+        for attr in sorted(old_attrs.keys() | new_attrs.keys()):
+            if old_attrs.get(attr) != new_attrs.get(attr):
+                differences.append(
+                    f'{path}/@{attr}: {show(old_attrs.get(attr))} -> '
+                    f'{show(new_attrs.get(attr))}')
+                if len(differences) >= max_diffs:
+                    return
+        if left[2] != right[2]:
+            differences.append(f'{path}/text: {show(left[2])} -> {show(right[2])}')
+            if len(differences) >= max_diffs:
+                return
+        a, b = children(left), children(right)
+        for key in sorted(a.keys() | b.keys()):
+            if key not in a:
+                differences.append(f'{path}/{key}: added to current model')
+            elif key not in b:
+                differences.append(f'{path}/{key}: missing from current model')
+            else:
+                descend(a[key], b[key], f'{path}/{key}')
+            if len(differences) >= max_diffs:
+                return
+
+    descend(old, new, old[0])
+    return differences
+
+
+def compare_reachability_model(cached, current, parameter_name):
+    """Return (compatible, differences). No cache data is changed."""
+    if cached == current:
+        return True, []
+    try:
+        old = _model_xml_signature(_reachability_xml(cached, parameter_name))
+        new = _model_xml_signature(_reachability_xml(current, parameter_name))
+    except (ET.ParseError, TypeError, ValueError) as exc:
+        return False, [f'Failed to compare expanded XML: {exc}']
+    if old == new:
+        return True, []
+    differences = _diff_model_signatures(old, new)
+    return False, differences or ['Reachability-relevant XML differs']
+
+
 class VolumeSelector(BaseSelector):
     def __init__(self):
         self.initializing_volume=True
@@ -68,6 +304,7 @@ class VolumeSelector(BaseSelector):
             if self.cfg['front_fov_deg']>generated['workspace_fov_deg'] or abs(self.cfg['front_yaw_offset_deg']-generated['workspace_front_offset_deg'])>1e-9:
                 raise ValueError('Requested FOV exceeds cache or front offset differs; regenerate cache')
             self.model_client=self.create_client(GetParameters,self.volume.meta["context"]["source_node"].rstrip("/")+"/get_parameters",callback_group=self.group)
+            self._model_normalization_logged=set()
             self.visual_target=None
             qos=QoSProfile(depth=1,reliability=ReliabilityPolicy.RELIABLE,durability=DurabilityPolicy.TRANSIENT_LOCAL)
             self.visualization_pub=self.create_publisher(String,'/base_selection/visualization_data',qos)
@@ -176,8 +413,27 @@ class VolumeSelector(BaseSelector):
         if not self.model_client.wait_for_service(timeout_sec=timeout):raise SelectionError('MoveIt model parameters unavailable')
         names=['robot_description','robot_description_semantic']
         reply=self.wait(self.model_client.call_async(GetParameters.Request(names=names)),self.remaining(deadline,self.cfg['service_timeout']))
-        if len(reply.values)!=2 or any(v.type!=ParameterType.PARAMETER_STRING or v.string_value!=self.volume.meta['context'][n] for n,v in zip(names,reply.values)):
-            raise SelectionError('Robot URDF/SRDF differs from cache; regenerate volume')
+        if len(reply.values)!=len(names):
+            raise SelectionError('MoveIt returned incomplete URDF/SRDF parameters')
+        for name, value in zip(names, reply.values):
+            if value.type!=ParameterType.PARAMETER_STRING:
+                raise SelectionError(f'MoveIt parameter {name} is not a string')
+            cached=self.volume.meta['context'][name]
+            current=value.string_value
+            compatible, differences = compare_reachability_model(
+                cached, current, name)
+            if not compatible:
+                raise SelectionError(
+                    f'{name} differs from cache in reachability-relevant fields: '
+                    + ' | '.join(differences)
+                    + '. Cache preserved; do not bypass without verifying geometry.'
+                )
+            if cached!=current and name not in self._model_normalization_logged:
+                self.get_logger().info(
+                    f'{name}: accepting reachability-equivalent XML '
+                    '(comparing effective position limits, collision geometry and SRDF policy)'
+                )
+                self._model_normalization_logged.add(name)
 
     def cache_context(self):
         context=self.volume.meta['context']
