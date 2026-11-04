@@ -6,7 +6,6 @@ from launch.substitutions import LaunchConfiguration
 
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
-from moveit_configs_utils import MoveItConfigsBuilder
 
 from launch.actions import IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
@@ -20,24 +19,13 @@ def generate_launch_description():
     start_hands = LaunchConfiguration("start_hands")
     initialize_payload = LaunchConfiguration("initialize_payload")
     reference_frame = LaunchConfiguration("reference_frame")
-    execute = LaunchConfiguration("execute")
     headless_mode = LaunchConfiguration("headless_mode")
 
     left_group = LaunchConfiguration("left_group")
     right_group = LaunchConfiguration("right_group")
     dual_group = LaunchConfiguration("dual_group")
-    pairing_window_sec = LaunchConfiguration("pairing_window_sec")
-    max_queue_per_arm = LaunchConfiguration("max_queue_per_arm")
-
-    moveit_config = (
-        MoveItConfigsBuilder(
-            "custom_robot", package_name="duo_ur"
-        )
-        .robot_description_semantic(file_path="config/duo_ur_onehand.srdf")
-        .robot_description_kinematics(file_path="config/kinematics.yaml")
-        .planning_pipelines(pipelines=["ompl"])
-        .to_moveit_configs()
-    )
+    commander_config = LaunchConfiguration("commander_config")
+    presets_file = LaunchConfiguration("presets_file")
 
     return LaunchDescription(
         [
@@ -46,13 +34,8 @@ def generate_launch_description():
             DeclareLaunchArgument("initialize_payload", default_value="true"),
             DeclareLaunchArgument(
                 "reference_frame",
-                default_value="mur", # In TF tree world is basically the coordinates of MiR. Maybe off by few cm. MuR is above world by around 30cm
-                description="Default reference frame for TCP poses and goals",
-            ),
-            DeclareLaunchArgument(
-                "execute",
-                default_value="true",
-                description="If true, MoveIt executes planned trajectories",
+                default_value="mur",
+                description="Reference frame for published TCP poses; goals carry their own frame",
             ),
             DeclareLaunchArgument(
                 "headless_mode",
@@ -74,16 +57,10 @@ def generate_launch_description():
                 default_value="both_ur_manipulator",
                 description="Existing combined MoveIt planning group for both arms",
             ),
-            DeclareLaunchArgument(
-                "pairing_window_sec",
-                default_value="0.15",
-                description="Time window to pair left/right goals into a coordinated trajectory [s]",
-            ),
-            DeclareLaunchArgument(
-                "max_queue_per_arm",
-                default_value="0",
-                description="Maximum pending goals per arm; 0 means unlimited",
-            ),
+            DeclareLaunchArgument("commander_config", default_value=PathJoinSubstitution(
+                [FindPackageShare("dual_arm_commander"), "config", "commander.yaml"])),
+            DeclareLaunchArgument("presets_file", default_value=PathJoinSubstitution(
+                [FindPackageShare("dual_arm_commander"), "config", "presets.yaml"])),
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(
                     PathJoinSubstitution(
@@ -115,27 +92,18 @@ def generate_launch_description():
                 ],
             ),
             Node(
-                package="dual_arm_driver",
-                executable="dual_arm_pose_commander",
-                name="dual_arm_moveit_commander",
+                package="dual_arm_commander",
+                executable="arm_commander",
+                name="dual_arm_commander",
                 output="screen",
                 parameters=[
+                    commander_config,
                     {"robot_description": ParameterValue(
-                        LaunchConfiguration("dual_arm_robot_description"), value_type=str)},
-                    moveit_config.robot_description_semantic,
-                    moveit_config.robot_description_kinematics,
-                    PathJoinSubstitution([FindPackageShare("dual_arm_driver"),
-                                          "config", "commander.yaml"]),
-                    {
-                        "left_group": left_group,
-                        "right_group": right_group,
-                        "dual_group": dual_group,
-                        "pairing_window_sec": ParameterValue(pairing_window_sec, value_type=float),
-                        "max_queue_per_arm": ParameterValue(max_queue_per_arm, value_type=int),
-                        "left_end_effector_link": "left_tcp",
-                        "right_end_effector_link": "right_tcp",
-                        "execute": ParameterValue(execute, value_type=bool),
-                    },
+                        LaunchConfiguration("dual_arm_robot_description"), value_type=str),
+                     "presets_file": presets_file,
+                     "left_group": left_group,
+                     "right_group": right_group,
+                     "dual_group": dual_group},
                 ],
             ),
             # Apply configured mass, CoG and optional inertia once each UR program runs.

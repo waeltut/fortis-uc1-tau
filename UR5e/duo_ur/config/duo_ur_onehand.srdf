@@ -156,9 +156,6 @@
     <disable_collisions link1="left_base_link_inertia" link2="left_plate" reason="Adjacent"/>
     <disable_collisions link1="left_base_link_inertia" link2="left_shoulder_link" reason="Adjacent"/>
     <disable_collisions link1="left_base_link_inertia" link2="mur" reason="Never"/>
-    <disable_collisions link1="left_base_link_inertia" link2="right_base_link_inertia" reason="Never"/>
-    <disable_collisions link1="left_base_link_inertia" link2="right_plate" reason="Never"/>
-    <disable_collisions link1="left_base_link_inertia" link2="right_shoulder_link" reason="Never"/>
     <disable_collisions link1="left_base_link_inertia" link2="shoulder" reason="Never"/>
     <disable_collisions link1="left_base_link_inertia" link2="torso" reason="Never"/>
     <disable_collisions link1="left_camera_base" link2="left_hand_base_link" reason="Never"/>
@@ -289,9 +286,6 @@
     <disable_collisions link1="left_hand_thumb_prox" link2="left_wrist_3_link" reason="Never"/>
     <disable_collisions link1="left_plate" link2="left_shoulder_link" reason="Never"/>
     <disable_collisions link1="left_plate" link2="mur" reason="Never"/>
-    <disable_collisions link1="left_plate" link2="right_base_link_inertia" reason="Never"/>
-    <disable_collisions link1="left_plate" link2="right_plate" reason="Never"/>
-    <disable_collisions link1="left_plate" link2="right_shoulder_link" reason="Never"/>
     <disable_collisions link1="left_plate" link2="shoulder" reason="Never"/>
     <disable_collisions link1="left_plate" link2="torso" reason="Adjacent"/>
     <disable_collisions link1="left_sensor_base" link2="left_wrist_1_link" reason="Never"/>
@@ -299,9 +293,6 @@
     <disable_collisions link1="left_sensor_base" link2="left_wrist_3_link" reason="Never"/>
     <disable_collisions link1="left_shoulder_link" link2="left_upper_arm_link" reason="Adjacent"/>
     <disable_collisions link1="left_shoulder_link" link2="mur" reason="Never"/>
-    <disable_collisions link1="left_shoulder_link" link2="right_base_link_inertia" reason="Never"/>
-    <disable_collisions link1="left_shoulder_link" link2="right_plate" reason="Never"/>
-    <disable_collisions link1="left_shoulder_link" link2="right_shoulder_link" reason="Never"/>
     <disable_collisions link1="left_shoulder_link" link2="shoulder" reason="Never"/>
     <disable_collisions link1="left_shoulder_link" link2="torso" reason="Never"/>
     <disable_collisions link1="left_upper_arm_link" link2="mur" reason="Never"/>

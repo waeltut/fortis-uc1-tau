@@ -1,223 +1,195 @@
-# Dual-arm UR5e command examples
+# Action examples
 
-Commands for Bash in the robot's ROS container. Positions are in metres and orientations are quaternions in `x, y, z, w` order. The arm examples below preserve the coordinates and identity orientation from your original README.
+Source `~/ros2_ws/install/setup.bash` in each terminal. Start the new bringup first.
+Coordinates below reproduce the existing home values or illustrate the API;
+review the target and use fake hardware/plan-only before physical execution.
+All numeric YAML values use decimal points.
 
-## Start the system
-
-In each new terminal:
-
-```bash
-source /opt/ros/humble/setup.bash
-source ~/ros2_ws/install/setup.bash
-```
-
-Start the complete platform interface in one terminal:
+## Named preset
 
 ```bash
-ros2 launch dual_arm_driver dual_arm_driver.launch.py
+ros2 action send_goal /arms/move dual_arm_interfaces/action/MoveArms \
+  '{goal_type: preset, preset: home}' --feedback
 ```
 
-Send the following commands from another terminal. With the default `execute:=true`, arm goals request real movement after successful planning.
-
-For planning without commander execution, launch instead:
+Short client (same action, not a separate command path):
 
 ```bash
-ros2 launch dual_arm_driver dual_arm_driver.launch.py execute:=false
+ros2 run dual_arm_commander move_preset home
+ros2 run dual_arm_commander move_preset home_joints --plan-only
 ```
 
-For fake arms without physical hand nodes or payload initialization, launch instead:
+`home` uses the original Cartesian home positions. `home_joints` is the different
+joint posture from the original SRDF. Neither controls fingers.
+
+## Left TCP pose
 
 ```bash
-ros2 launch dual_arm_driver dual_arm_driver.launch.py use_fake_hardware:=true launch_rviz:=true
+ros2 action send_goal /arms/move dual_arm_interfaces/action/MoveArms \
+  '{goal_type: explicit, mode: left, target_type: pose,
+    left_target: {header: {frame_id: mur}, pose: {
+      position: {x: 0.6, y: 0.35, z: 1.2},
+      orientation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0}}},
+    velocity_scaling: 0.1, acceleration_scaling: 0.1}' --feedback
 ```
 
-Do not launch these alternatives together. The fake-hardware commands refer to the cleaned package set.
-
-## Arm target coordinates
-
-| Arm | Frame | X | Y | Z | Quaternion (x, y, z, w) |
-| --- | --- | --- | --- | --- | --- | --- |
-| Left | `mur` | 0.6 | 0.15 | 1.2 | (0, 0, 0, 1) |
-| Right | `mur` | 0.6 | -0.15 | 1.2 | (0, 0, 0, 1) |
-
-These are absolute TCP poses in `mur`, not offsets from the current TCP position. Identity orientation aligns the target TCP axes with `mur`; it does not preserve the current orientation. The controlled links are `left_tcp` and `right_tcp`.
-
-### Left arm
+## Right TCP pose
 
 ```bash
-ros2 topic pub --once /left_arm/goal_pose geometry_msgs/msg/PoseStamped \
-  '{header: {frame_id: mur}, pose: {position: {x: 0.6, y: 0.15, z: 1.2}, orientation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0}}}'
+ros2 action send_goal /arms/move dual_arm_interfaces/action/MoveArms \
+  '{goal_type: explicit, mode: right, target_type: pose,
+    right_target: {header: {frame_id: mur}, pose: {
+      position: {x: 0.6, y: -0.35, z: 1.2},
+      orientation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0}}},
+    velocity_scaling: 0.1, acceleration_scaling: 0.1}' --feedback
 ```
 
-### Right arm
+## Both simultaneously
 
 ```bash
-ros2 topic pub --once /right_arm/goal_pose geometry_msgs/msg/PoseStamped \
-  '{header: {frame_id: mur}, pose: {position: {x: 0.6, y: -0.15, z: 1.2}, orientation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0}}}'
+ros2 action send_goal /arms/move dual_arm_interfaces/action/MoveArms \
+  '{goal_type: explicit, mode: both, target_type: pose,
+    left_target: {header: {frame_id: mur}, pose: {
+      position: {x: 0.6, y: 0.35, z: 1.2},
+      orientation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0}}},
+    right_target: {header: {frame_id: mur}, pose: {
+      position: {x: 0.6, y: -0.35, z: 1.2},
+      orientation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0}}},
+    velocity_scaling: 0.1, acceleration_scaling: 0.1}' --feedback
 ```
 
-### Send both arm targets
+This generates a single combined joint-space plan, not two independent concurrent
+plans. It does not enforce a fixed relative transform between the two TCPs along
+the path. It is not a rigid-object cooperative carrying controller.
 
-Publish from two background CLI processes so the commands can arrive close together:
+## Both sequentially, right first
 
 ```bash
-ros2 topic pub --once /left_arm/goal_pose geometry_msgs/msg/PoseStamped \
-  '{header: {frame_id: mur}, pose: {position: {x: 0.6, y: 0.15, z: 1.2}, orientation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0}}}' &
-left_pub_pid=$!
-
-ros2 topic pub --once /right_arm/goal_pose geometry_msgs/msg/PoseStamped \
-  '{header: {frame_id: mur}, pose: {position: {x: 0.6, y: -0.15, z: 1.2}, orientation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0}}}' &
-right_pub_pid=$!
-
-wait "$left_pub_pid" "$right_pub_pid"
+ros2 action send_goal /arms/move dual_arm_interfaces/action/MoveArms \
+  '{goal_type: explicit, mode: sequential, sequential_order: right_first,
+    target_type: pose,
+    left_target: {header: {frame_id: mur}, pose: {
+      position: {x: 0.6, y: 0.35, z: 1.2},
+      orientation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0}}},
+    right_target: {header: {frame_id: mur}, pose: {
+      position: {x: 0.6, y: -0.35, z: 1.2},
+      orientation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0}}},
+    velocity_scaling: 0.1, acceleration_scaling: 0.1}' --feedback
 ```
 
-The commander pairs eligible left/right goals arriving within `pairing_window_sec` (default 0.15 s). Independent CLI processes have variable startup/discovery delays, so this does **not guarantee** one combined trajectory. `wait` waits for the publishers to exit, not for arm movement to finish. For these configured home positions, the home service below inserts a protected pair atomically and also commands the hands after successful arm execution.
+The second arm is planned only after the first execution succeeds. If the second
+fails, there is no rollback of the first arm.
 
-## Home service
+## Explicit joint target
+
+The named-joint order can vary; the name/position pairing must match. This sample
+uses your existing SRDF left `ready` posture, in radians:
 
 ```bash
-ros2 service call /dual_arm/go_home std_srvs/srv/Trigger '{}'
+ros2 action send_goal /arms/move dual_arm_interfaces/action/MoveArms \
+  '{goal_type: explicit, mode: left, target_type: joints,
+    left_joints: {
+      name: [left_shoulder_pan_joint, left_shoulder_lift_joint, left_elbow_joint,
+             left_wrist_1_joint, left_wrist_2_joint, left_wrist_3_joint],
+      position: [0.0, -1.5707, 1.5707, 0.0, 1.5707, -0.7854]},
+    velocity_scaling: 0.1, acceleration_scaling: 0.1,
+    plan_only: true}' --feedback
 ```
 
-With the supplied configuration, this requests:
+For both arms, use `mode: both` and include an analogous `right_joints` field with
+all six right joint names and positions. Presets are more convenient for repeated
+12-joint targets.
 
-- Left TCP: `(0.6, 0.15, 1.2)` in `mur`.
-- Right TCP: `(0.6, -0.15, 1.2)` in `mur`.
-- Both TCP orientations: `(0, 0, 0, 1)`.
-- After successful arm execution, both hands receive `[0.9, 0, 1, 1, 1, 1]`.
-
-A service response of `success: true` means **queued**, not completed. Existing queued work may run first. Watch the result:
+## Plan without execution
 
 ```bash
-ros2 topic echo /dual_arm/home_status std_msgs/msg/String --qos-durability transient_local
+ros2 action send_goal /arms/move dual_arm_interfaces/action/MoveArms \
+  '{goal_type: preset, preset: home, plan_only: true}' --feedback
 ```
 
-The service requires subscribers on both hand command topics before accepting a request. It therefore normally rejects requests in fake-hardware mode or when the hand nodes are disabled. Subscriber presence does not prove a physical hand is connected. The final status confirms finger commands were published, not that the hands reached their positions.
+Success means planning succeeded. Result `executed`, `left_completed` and
+`right_completed` remain false. Sequential plan-only requests are rejected with
+`INVALID_GOAL`: use fake hardware to test the whole sequence.
 
-With `execute:=false`, the commander does not execute the home trajectory or send the post-execution finger commands. The home configuration is in `dual_arm_driver/config/commander.yaml`; restart the launch after changing it. This service homes the arms/hands, not the MiR mobile base.
-
-## Hand commands
-
-Messages contain six normalized values, each from 0 to 1:
-
-```text
-[thumb, thumb_aux, index, middle, ring, pinky]
-```
-
-The node clamps values to this range and maps them to device positions 0–1000. `thumb_aux` controls the second thumb degree of freedom. Commands received while the device is disconnected are discarded; resend after its connection message appears.
-
-### Open left hand
+Monitor planned trajectories before sending a goal (topic is not latched):
 
 ```bash
-ros2 topic pub --once /hand_L/finger_positions std_msgs/msg/Float32MultiArray \
-  '{data: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]}'
+ros2 topic echo /arms/planned_trajectory
 ```
 
-### Open right hand
+## Cancellation
+
+The included client retains its goal handle and can request cancellation:
 
 ```bash
-ros2 topic pub --once /hand_R/finger_positions std_msgs/msg/Float32MultiArray \
-  '{data: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]}'
+ros2 run dual_arm_commander move_preset home --cancel-after 2.0
 ```
 
-### Close left hand — original all-ones example
+It sends the request, waits two seconds from acceptance and requests cancellation,
+then waits for a final result. If the action already finished, there is nothing to
+cancel. Test cancellation using fake hardware first. Closing a CLI terminal is not
+a cancellation protocol and must not be treated as stopping the robot.
+
+## Read state
 
 ```bash
-ros2 topic pub --once /hand_L/finger_positions std_msgs/msg/Float32MultiArray \
-  '{data: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]}'
+ros2 topic echo /left_arm/pose --once
+ros2 topic echo /right_arm/pose --once
+ros2 topic echo /joint_states --once
+ros2 action info /arms/move
+ros2 interface show dual_arm_interfaces/action/MoveArms
 ```
 
-### Close right hand — original all-ones example
+## Python coordinator
 
-```bash
-ros2 topic pub --once /hand_R/finger_positions std_msgs/msg/Float32MultiArray \
-  '{data: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]}'
+The runnable preset client is in
+`dual_arm_commander/dual_arm_commander/client.py`. This is the core pattern inside
+a node running under an executor (use a reentrant callback group for a coordinator
+that awaits actions from its callbacks):
+
+```python
+from action_msgs.msg import GoalStatus
+from rclpy.action import ActionClient
+from rclpy.callback_groups import ReentrantCallbackGroup
+from dual_arm_interfaces.action import MoveArms
+
+# In your node's __init__:
+self.arm_group = ReentrantCallbackGroup()
+self.arm_client = ActionClient(
+    self, MoveArms, '/arms/move', callback_group=self.arm_group)
+
+# As an async method called by your running ROS executor:
+async def move_home(self):
+    goal = MoveArms.Goal()
+    goal.goal_type = 'preset'
+    goal.preset = 'home'
+    handle = await self.arm_client.send_goal_async(goal)
+    if not handle.accepted:
+        raise RuntimeError('Commander busy or faulted')
+    self.current_arm_goal = handle  # Save for an external cancellation request.
+    outcome = await handle.get_result_async()
+    self.current_arm_goal = None
+    if outcome.status != GoalStatus.STATUS_SUCCEEDED:
+        raise RuntimeError(outcome.result.message)
+    return outcome.result
 ```
 
-### Compact closed fists — both hands
+To cancel from another callback, call
+`self.current_arm_goal.cancel_goal_async()` and still wait for the original final
+result. A cancellation acknowledgement alone does not complete your task step.
+For dynamically selected poses, set `goal_type='explicit'`, `mode='left'` or
+`'right'`, `target_type='pose'` and the appropriate `PoseStamped` target. Keep its
+stamp zero. Wait for navigation success before sending it. Do not send the next
+arm goal until the current one terminates.
 
-These retain your original compact-fist values:
+## Existing hands (separate from arm actions)
+
+These are retained unchanged for compatibility. They publish desired finger
+positions; publishing does not confirm physical completion:
 
 ```bash
 ros2 topic pub --once /hand_L/finger_positions std_msgs/msg/Float32MultiArray \
   '{data: [0.9, 0.0, 1.0, 1.0, 1.0, 1.0]}'
-
 ros2 topic pub --once /hand_R/finger_positions std_msgs/msg/Float32MultiArray \
   '{data: [0.9, 0.0, 1.0, 1.0, 1.0, 1.0]}'
 ```
-
-### Open both hands
-
-```bash
-ros2 topic pub --once /hand_L/finger_positions std_msgs/msg/Float32MultiArray \
-  '{data: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]}'
-
-ros2 topic pub --once /hand_R/finger_positions std_msgs/msg/Float32MultiArray \
-  '{data: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]}'
-```
-
-### Original “nice gesture” example
-
-```bash
-ros2 topic pub --once /hand_L/finger_positions std_msgs/msg/Float32MultiArray \
-  '{data: [0.9, 0.0, 1.0, 0.0, 1.0, 1.0]}'
-```
-
-Use `/hand_R/finger_positions` for the same command on the right hand.
-
-### Run a hand node independently
-
-Only use these when that hand node is not already started by the main launch. Run each in its own terminal:
-
-```bash
-ros2 run hand_control hand_control --ros-args -p hand:=L
-```
-
-```bash
-ros2 run hand_control hand_control --ros-args -p hand:=R
-```
-
-The device paths are `/dev/hand_L` and `/dev/hand_R`. Hand control uses topics; the supplied hand node does not define an open/close service.
-
-## Read current poses and inspect interfaces
-
-Read one current pose for each arm:
-
-```bash
-ros2 topic echo /left_arm/pose geometry_msgs/msg/PoseStamped --once
-ros2 topic echo /right_arm/pose geometry_msgs/msg/PoseStamped --once
-```
-
-Inspect the corresponding TF transforms (Ctrl+C to stop):
-
-```bash
-ros2 run tf2_ros tf2_echo mur left_tcp
-```
-
-```bash
-ros2 run tf2_ros tf2_echo mur right_tcp
-```
-
-List controller states and available services:
-
-```bash
-ros2 control list_controllers -c /controller_manager
-ros2 service list -t
-ros2 service type /dual_arm/go_home
-```
-
-Check whether the hand command topics have subscribers:
-
-```bash
-ros2 topic info /hand_L/finger_positions
-ros2 topic info /hand_R/finger_positions
-```
-
-Watch future combined plans (this does not indicate execution completion):
-
-```bash
-ros2 topic echo /dual_arm/planned_trajectory moveit_msgs/msg/RobotTrajectory
-```
-
-CLI publication confirms a message was published, not that planning succeeded or the robot reached its target. Check commander logs, current poses and the home status topic as applicable.

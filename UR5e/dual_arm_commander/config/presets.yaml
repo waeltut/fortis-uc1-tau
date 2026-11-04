@@ -1,0 +1,26 @@
+# Loaded once at startup. Restart bringup after changes.
+# home preserves the OLD Cartesian home targets, but does NOT command fingers.
+# *_joints are copied from your existing SRDF states, not hardware-validated.
+# Positions: metres; joint angles: radians; quaternion order: x,y,z,w.
+presets:
+  home:
+    mode: both
+    target_type: joints
+    velocity_scaling: 0.1
+    acceleration_scaling: 0.1
+
+    left_joints:
+      left_shoulder_pan_joint: 0.08411476016044617
+      left_shoulder_lift_joint: -2.652092596093649
+      left_elbow_joint: -1.8159575462341309
+      left_wrist_1_joint: -1.8152581653990687
+      left_wrist_2_joint: -1.4864204565631312
+      left_wrist_3_joint: -1.8331916967975062
+
+    right_joints:
+      right_shoulder_pan_joint: -0.05933601060976201
+      right_shoulder_lift_joint: -0.4785308402827759
+      right_elbow_joint: 1.8090828100787562
+      right_wrist_1_joint: -1.329770789747574
+      right_wrist_2_joint: 1.4967553615570068
+      right_wrist_3_joint: -0.2608688513385218

@@ -1,0 +1,36 @@
+# Strings are case-insensitive; preset names are case-sensitive.
+string goal_type "preset"
+string preset
+string mode
+string target_type
+string sequential_order "left_first"
+geometry_msgs/PoseStamped left_target
+geometry_msgs/PoseStamped right_target
+# Named joints: name and position only, in radians; exactly all six per active arm.
+sensor_msgs/JointState left_joints
+sensor_msgs/JointState right_joints
+# 0 uses node defaults for explicit goals. Preset goals use preset settings.
+float64 velocity_scaling
+float64 acceleration_scaling
+# Plan without executing. Sequential plan-only is rejected (second start is unknown).
+bool plan_only false
+---
+int32 OK=0
+int32 INVALID_GOAL=1
+int32 NOT_READY=2
+int32 IK_FAILED=3
+int32 PLANNING_FAILED=4
+int32 EXECUTION_FAILED=5
+int32 CANCELED=6
+int32 TIMEOUT=7
+int32 INTERNAL_ERROR=8
+int32 error_code
+int32 moveit_error_code
+string message
+bool left_completed
+bool right_completed
+bool executed
+---
+string stage
+string active_arms
+string detail

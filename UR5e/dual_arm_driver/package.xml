@@ -2,23 +2,18 @@
 <package format="3">
   <name>dual_arm_driver</name>
   <version>0.0.1</version>
-  <description>Headless dual UR5e TCP pose and MoveIt interface</description>
+  <description>Dual UR5e hardware bringup, payload setup and TCP state publishing</description>
   <maintainer email="hugo.minkkinen@tuni.fi">fortis_dev</maintainer>
   <license>TODO: License declaration</license>
   <buildtool_depend>ament_cmake</buildtool_depend>
   <buildtool_depend>ament_cmake_python</buildtool_depend>
   <exec_depend>duo_ur</exec_depend>
+  <exec_depend>dual_arm_commander</exec_depend>
   <depend>geometry_msgs</depend>
   <exec_depend>hand_control</exec_depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
-  <exec_depend>moveit_configs_utils</exec_depend>
-  <depend>moveit_msgs</depend>
-  <depend>moveit_ros_planning_interface</depend>
-  <depend>rclcpp</depend>
   <depend>rclpy</depend>
-  <depend>std_msgs</depend>
-  <depend>std_srvs</depend>
   <depend>tf2_ros</depend>
   <depend>ur_msgs</depend>
   <export>
