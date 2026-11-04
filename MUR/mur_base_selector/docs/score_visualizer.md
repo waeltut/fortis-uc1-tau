@@ -62,27 +62,41 @@ Start/failure/cancellation clears old map and arrow outputs. Completed maps rema
 
 In the 3D panel use the same fixed frame as the selector (normally `map`) and enable:
 
-| Topic under `/base_selection/score_map/` | Type / meaning |
-|---|---|
-| `fast/total` | OccupancyGrid: total approximate score |
-| `fast/travel` | OccupancyGrid: weighted travel contribution |
-| `fast/destination` | OccupancyGrid: weighted destination centre-cell cost |
-| `fast/distance` | OccupancyGrid: weighted preferred-distance penalty |
-| `fast/facing` | OccupancyGrid: weighted facing-sector penalty |
-| `fast/state` | OccupancyGrid: evaluation status, not a score |
-| `fast/winners` | MarkerArray: heading arrows, namespace and colour identify arm |
-| `detailed/total`, `detailed/travel`, etc. | Same layers using successful detailed checks |
-| `detailed/state`, `detailed/winners` | Detailed evaluation status and winning arrows |
-| `metadata` | String JSON: counts, scale, raw score ranges, clipping, configuration and snapshot time |
-| `status` | String JSON: idle/calculating/complete/failed/cancelled |
+Each group has its own topics under `/base_selection/score_map/`:
 
-Enable one score layer at a time to avoid overlapping maps hiding each other. Arrow namespaces use your configured arm names. Arrows are drawn at the real sampled XY position with its real candidate heading; they are not snapped to cell centres. Arrow display is limited by `max_markers`; the grid still contains every scored cell.
+| Group | Meaning | Suggested display colour |
+|---|---|---|
+| `combined` | Lowest-cost candidate across both arms | White/grey |
+| `left` | Lowest-cost left-arm candidate, including cells where right wins overall | Blue |
+| `right` | Lowest-cost right-arm candidate, including cells where left wins overall | Orange |
+
+Arm group names follow the names in the cache. Use `arm_mode:=either` (default) to calculate both arms separately in one run. An arm-only filter leaves the other arm's maps unknown. The special `arm_mode:=both` produces joint-arm candidates in an additional `both` group; these are not attributed to either individual arm.
+
+Every group publishes these layers:
+
+| Suffix | Type / meaning |
+|---|---|
+| `total` | OccupancyGrid: total score |
+| `travel` | OccupancyGrid: weighted travel contribution |
+| `destination` | OccupancyGrid: weighted destination cost |
+| `distance` | OccupancyGrid: weighted preferred-distance penalty |
+| `facing` | OccupancyGrid: weighted facing-sector penalty |
+| `state` | OccupancyGrid: evaluation status, not a score |
+| `winners` | MarkerArray: winning candidate headings, arm-coloured arrows |
+
+For example, enable `/base_selection/score_map/left/total`, `/base_selection/score_map/right/total`, or `/base_selection/score_map/combined/total`. Individual contributions are available as e.g. `/base_selection/score_map/left/facing`. Status and metadata remain at `/base_selection/score_map/status` and `/base_selection/score_map/metadata`.
+
+There are no fast/detailed topic branches. The configured calculation mode determines the scores published on these same topics. Detailed mode publishes only its final checked results, not temporary fast estimates. Metadata records the mode and per-group ranges/counts in `groups`.
+
+OccupancyGrid carries numeric costs, not RGB colours. Set colours separately for each topic in the 3D panel. Where available, choose Custom colour mode and set minimum/maximum colours to a light/dark shade of the desired hue; keep unknown cells transparent. Keep the combined layer white/grey. Use separate 3D panels or toggle layers when comparing overlapping cells: drawing all maps on the same plane can hide one beneath another. All groups share the same grid origin, dimensions, resolution and score scale.
+
+Arrow namespaces use your configured arm names. Arrows are drawn at the real sampled XY position with its real candidate heading; they are not snapped to cell centres. Arrow display is limited by `max_markers` per group; each grid still contains every scored cell.
 
 The timestamp is the diagnostic snapshot acquisition time, not the current display time. Use `fixed_frame` to display old snapshots without requiring old moving-frame transforms. A map is historical even when it remains visible.
 
 ## How to interpret cells
 
-A candidate is an XY position **plus heading and arm**. The grid groups candidates into XY cells and chooses the one with the lowest total score in each cell. Every component map shows the contribution of that same winning candidate. It does not independently choose a different arm/heading for each component.
+A candidate is an XY position **plus heading and arm**. Each arm grid groups that arm’s candidates into XY cells and chooses the one with the lowest total score in each cell. The combined grid chooses across all candidates. An arm’s candidates are retained even where the other arm wins the combined cell. Every component map shows the contribution of that same winning candidate. It does not independently choose a different arm/heading for each component.
 
 Score layers use a fixed linear scale:
 
@@ -109,7 +123,7 @@ A fast state of 0 is not a footprint/path clearance certificate. A detailed stat
 
 Travel-field truncation is recorded in metadata. Unsettled/out-of-map/blocked/disconnected locations do not receive travel scores and remain unknown; these causes are not conflated with confirmed infeasibility. Increase `diagnostic.travel_budget` and, if necessary, `diagnostic.calculation_budget` to inspect more of a large map.
 
-**Detailed:** publishes the fast map, then checks candidates in ascending approximate-score order, followed by candidates lacking a travel estimate. It uses the captured footprint and costmaps for destination/swept-path checks, and requests a Nav2 path for each destination that passes. Successful candidates use the normal selector's final score formula (validated path length and path cost instead of the travel-field estimate). No exact target IK is performed.
+**Detailed:** computes preliminary scores internally, then checks candidates in ascending approximate-score order, followed by candidates lacking a travel estimate. It uses the captured footprint and costmaps for destination/swept-path checks, and requests a Nav2 path for each destination that passes. Successful candidates use the normal selector's final score formula (validated path length and path cost instead of the travel-field estimate). No exact target IK is performed.
 
 ```bash
 # Stop the previous visualizer before starting another with the same outputs.

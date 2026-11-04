@@ -49,6 +49,7 @@ class ScoreVisualizer(VolumeSelector):
     # either selector constructor: no selection publishers/services/timers exist.
     def __init__(self):
         Node.__init__(self, 'mur_score_visualizer')
+        self._model_normalization_logged = set()
         self.cfg = {}
         for key, value in NAV_DEFAULTS.items():
             self.declare_parameter(key, value)
@@ -108,10 +109,12 @@ class ScoreVisualizer(VolumeSelector):
         self.create_subscription(PoseStamped, '/base_selection/target', self.on_target, 10)
         self.create_subscription(PoseStamped, '/base_selection/score_target', self.on_target, 10)
         qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
-        self.grid_pubs = {mode: {key: self.create_publisher(OccupancyGrid, PREFIX+'/'+mode+'/'+key, qos)
-                                for key in (*COMPONENTS, 'state')} for mode in ('fast', 'detailed')}
-        self.marker_pubs = {mode: self.create_publisher(MarkerArray, PREFIX+'/'+mode+'/winners', qos)
-                            for mode in ('fast', 'detailed')}
+        self.output_groups = ('combined', *self.volume.arm_names)
+        if self.cfg['arm_mode'] == 'both': self.output_groups += ('both',)
+        self.grid_pubs = {group: {key: self.create_publisher(OccupancyGrid, PREFIX+'/'+group+'/'+key, qos)
+                                for key in (*COMPONENTS, 'state')} for group in self.output_groups}
+        self.marker_pubs = {group: self.create_publisher(MarkerArray, PREFIX+'/'+group+'/winners', qos)
+                            for group in self.output_groups}
         self.status_pub = self.create_publisher(String, PREFIX+'/status', qos)
         self.metadata_pub = self.create_publisher(String, PREFIX+'/metadata', qos)
         self.create_service(Trigger, PREFIX, self.trigger)
@@ -161,10 +164,19 @@ class ScoreVisualizer(VolumeSelector):
 
     def clear_outputs(self, stamp):
         raster = ScoreRaster([], self.diag['grid_resolution'], self.diag['max_cells'])
-        for mode in self.grid_pubs: self.publish_raster(mode, raster, [], stamp)
+        for group in self.grid_pubs: self.publish_raster(group, raster, [], stamp)
         self.metadata_pub.publish(String(data=json.dumps({'request_id': self.sequence, 'state': 'calculating', 'valid_for_navigation': False})))
 
-    def publish_raster(self, mode, raster, records, stamp):
+    def publish_groups(self, raster, records, stamp):
+        # Every arm gets its own minimum-total winner, even where another arm
+        # wins the combined map. Reuse geometry and scale for direct comparison.
+        summaries = {}
+        for group in self.output_groups:
+            selected = records if group == 'combined' else [r for r in records if r['arm'] == group]
+            summaries[group] = self.publish_raster(group, raster, selected, stamp)
+        return summaries
+
+    def publish_raster(self, group, raster, records, stamp):
         layers, winners, ranges = raster.render(records, self.diag['score_max'])
         for key, data in layers.items():
             msg = OccupancyGrid()
@@ -175,7 +187,7 @@ class ScoreVisualizer(VolumeSelector):
             msg.info.origin.position.x = float(raster.origin[0]); msg.info.origin.position.y = float(raster.origin[1])
             msg.info.origin.orientation.w = 1.0
             msg.data = data.tolist()
-            self.grid_pubs[mode][key].publish(msg)
+            self.grid_pubs[group][key].publish(msg)
         markers = [Marker(action=Marker.DELETEALL)]
         ordered = sorted(winners.items())
         stride = max(1, math.ceil(len(ordered)/self.diag['max_markers']))
@@ -189,7 +201,7 @@ class ScoreVisualizer(VolumeSelector):
             rgb = colorsys.hsv_to_rgb(names.index(record['arm'])/len(names), .8, 1.)
             m.color.r, m.color.g, m.color.b = rgb; m.color.a = .9
             markers.append(m)
-        self.marker_pubs[mode].publish(MarkerArray(markers=markers))
+        self.marker_pubs[group].publish(MarkerArray(markers=markers))
         return {'scored_cells': len(winners), 'ranges': ranges,
                 'states': dict(Counter(r['state'] for r in records)), 'displayed_arrows': len(markers)-1}
 
@@ -237,8 +249,9 @@ class ScoreVisualizer(VolumeSelector):
                         record.update(state='estimated', scores=components(pose, arm, bearing, goal, float(cost), centre_cost, self.cfg))
                     records.append(record)
             self.guard_motion(start, joints)
-            fast_summary = self.publish_raster('fast', raster, records, stamp)
-            detailed_summary = None
+            summaries = None
+            if self.diag['mode'] == 'fast':
+                summaries = self.publish_groups(raster, records, stamp)
             checked = paths = 0
             partial = False
             if self.diag['mode'] == 'detailed':
@@ -273,14 +286,14 @@ class ScoreVisualizer(VolumeSelector):
                     travel_cost = path_length(poses)*(1+self.cfg['travel_inflation_weight']*path_cost)
                     r.update(state='path_checked', scores=components(r['pose'], r['arm'], r['bearing'], goal, travel_cost, destination, self.cfg))
                 self.guard_motion(start, joints)
-                detailed_summary = self.publish_raster('detailed', raster, detailed, stamp)
+                summaries = self.publish_groups(raster, detailed, stamp)
             metadata = {
                 'request_id': self.sequence, 'state': 'complete', 'valid_for_navigation': False,
                 'frame': self.cfg['fixed_frame'], 'snapshot_stamp': {'sec': stamp.sec, 'nanosec': stamp.nanosec},
                 'target': goal, 'base_start': list(start), 'cache_id': self.volume.meta['cache_id'],
                 'mode': self.diag['mode'], 'candidate_count': len(rows), 'travel_field_truncated': truncated,
                 'detailed_partial': partial, 'destination_checks': checked, 'path_requests': paths,
-                'fast': fast_summary, 'detailed': detailed_summary,
+                'groups': summaries,
                 'grid': {'origin': raster.origin, 'width': raster.width, 'height': raster.height, 'resolution': raster.resolution},
                 'score_max': self.diag['score_max'], 'component_values': 'weighted contributions of minimum-total winner',
                 'arm_order': self.volume.arm_names, 'selector_configuration': self.cfg, 'diagnostic_configuration': self.diag,

@@ -26,6 +26,7 @@ exec(compile(tree,str(path),'exec'),m.__dict__)
 def node(rows=None):
     n=selector.node(rows);n.__class__=m.ScoreVisualizer
     n.diag=copy.deepcopy(m.DIAGNOSTICS);n.volume.arm_names=['left','right']
+    n.output_groups=('combined','left','right')
     n.metadata_pub=transport.Publisher();n.clears=[];n.rasters=[]
     n.clear_outputs=lambda stamp:n.clears.append(stamp)
     def publish(mode,raster,records,stamp):
@@ -53,7 +54,7 @@ class DiagnosticWorkflowTests(unittest.TestCase):
         n.calculate(transport.PoseStamped())
         metadata=json.loads(n.metadata_pub.messages[-1].data)
         self.assertTrue(metadata['detailed_partial']);self.assertEqual(metadata['path_requests'],1)
-        detailed=n.rasters[-1][1]
+        detailed=n.rasters[0][1]
         self.assertEqual(sum(r['state']=='unchecked' for r in detailed),3)
         self.assertEqual(sum(r['state']=='path_checked' for r in detailed),1)
         self.assertFalse(n.pose_pub.messages)
@@ -63,8 +64,8 @@ class DiagnosticWorkflowTests(unittest.TestCase):
         n.polygon_check=lambda *a:(False,'obstacle',0.)
         n.compute_path=lambda *a:self.fail('blocked destination must not plan')
         n.calculate(transport.PoseStamped())
-        self.assertTrue(all(r['scores'] is None for r in n.rasters[-1][1]))
-        self.assertTrue(all(r['state']=='destination_obstacle' for r in n.rasters[-1][1]))
+        self.assertTrue(all(r['scores'] is None for r in n.rasters[0][1]))
+        self.assertTrue(all(r['state']=='destination_obstacle' for r in n.rasters[0][1]))
 
     def test_planner_timeout_retains_unknown_and_marks_partial(self):
         n=node();n.diag['mode']='detailed'
@@ -73,7 +74,7 @@ class DiagnosticWorkflowTests(unittest.TestCase):
         n.calculate(transport.PoseStamped())
         metadata=json.loads(n.metadata_pub.messages[-1].data)
         self.assertTrue(metadata['detailed_partial'])
-        self.assertTrue(all(r['state']=='unchecked' for r in n.rasters[-1][1]))
+        self.assertTrue(all(r['state']=='unchecked' for r in n.rasters[0][1]))
 
     def test_cancel_clears_outputs_and_releases_busy(self):
         n=node();n.stop.set();n.calculate(transport.PoseStamped())
@@ -85,6 +86,31 @@ class DiagnosticWorkflowTests(unittest.TestCase):
         metadata=json.loads(n.metadata_pub.messages[-1].data)
         self.assertEqual(metadata['state'],'complete');self.assertEqual(metadata['candidate_count'],0)
         self.assertEqual(n.rasters[-1][2]['total'].tolist(),[-1])
+
+    def test_separate_arms_preserve_losing_arm_and_shared_geometry(self):
+        from test_score_grid import row, record
+        n=node()
+        raster=m.ScoreRaster([row(.01),row(.02),row(.3)],.1,100)
+        records=[record((.01,0,0),5.,arm='left',travel=4.),
+                 record((.02,0,1),2.,arm='right',travel=1.),
+                 record((.3,0,0),3.,arm='left')]
+        n.publish_groups(raster,records,None)
+        combined,left,right=[item[2] for item in n.rasters]
+        self.assertEqual(combined['total'][0],20)
+        self.assertEqual(left['total'][0],50)
+        self.assertEqual(right['total'][0],20)
+        self.assertEqual(left['travel'][0],40)
+        self.assertEqual(right['travel'][0],10)
+        self.assertEqual(right['total'][-1],-1)
+        self.assertEqual(left['total'].shape,right['total'].shape)
+
+    def test_detailed_publishes_only_final_groups(self):
+        n=node();n.diag['mode']='detailed'
+        n.calculate(transport.PoseStamped())
+        self.assertEqual([r[0] for r in n.rasters],['combined','left','right'])
+        self.assertTrue(all(r['state']=='path_checked' for r in n.rasters[0][1]))
+        self.assertEqual(set(json.loads(n.metadata_pub.messages[-1].data)['groups']),
+                         {'combined','left','right'})
 
     def test_target_only_stored_without_computation(self):
         n=node();n.last_target=None
