@@ -7,8 +7,8 @@ Requires Nav2, TF, mur_base_selector, MoveIt and dual_arm_commander.
 
 Replace the packages `mur_base_selector`, `mur_base_selector_interfaces` and
 `mur_test` in `~/ros2_ws/src/MUR`. Keep your generated dexterous cache and robot
-configuration. Stop running selector/test clients before rebuilding: SelectBase's
-interface has changed, so all its servers and clients must use the rebuilt interface.
+configuration. The selector and test must use the same installed SelectBase interface. Stop the
+selector while replacing/rebuilding its package, then source and restart it.
 
 ```bash
 cd ~/ros2_ws
@@ -78,20 +78,14 @@ warning. Choose `new` to collect another workspace from the current location.
 This prevents an incidental click from changing an active navigation/arm request.
 `quit` does not automatically home or drive the base back.
 
-## Topic compatibility
+## Point input and selector service
 
-Publishing a PoseStamped to `/base_selection/target` still performs a single-point
-selection using the selector's configured arm mode, exactly as before. The relay's
-new default `/mur_test/point` deliberately avoids that automatic selection while
-collecting a workspace. To use the relay for the original direct topic workflow:
+The relay sends clicks to `/mur_test/point`. They are collected locally until
+`done`; the selector is contacted only by the service request. The selector has
+no legacy `/base_selection/target` input or selected_pose output. To select a
+single point directly, call `/base_selection/select` with its `target` and `arm`
+fields, or a one-element `targets` array. This does not command navigation.
 
-```bash
-ros2 run mur_test pose_height_relay --ros-args \
-  -p output_topic:=/base_selection/target -p height_m:=1.3
-```
-
-That direct workflow publishes selection results; this service-driven test does
-not consume those results or automatically navigate for them.
 To add a 3D point directly to the test without the relay:
 
 ```bash

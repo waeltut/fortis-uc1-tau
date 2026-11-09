@@ -66,7 +66,7 @@ def load_node():
     tree = ast.parse(path.read_text())
     blocked = ('rclpy', 'rcl_interfaces', 'action_msgs', 'geometry_msgs', 'sensor_msgs',
                'lifecycle_msgs', 'std_msgs', 'std_srvs', 'nav_msgs', 'nav2_msgs',
-               'mur_reachability', 'tf2_ros', 'visualization_msgs')
+               'mur_reachability', 'tf2_ros', 'tf2_msgs', 'visualization_msgs')
     tree.body = [n for n in tree.body if not
                  (isinstance(n, ast.ImportFrom) and n.module and n.module.split('.')[0] in blocked)
                  and not (isinstance(n, ast.Import) and any(a.name in blocked for a in n.names))]
@@ -111,6 +111,10 @@ def node():
     n.compute_path = lambda c, start, deadline: ([start, c.pose], '')
     n.check_path = lambda *a: (True, '', .2)
     n.planner = NS(wait_for_server=lambda **kw: True)
+    n.activate_inputs = lambda: None
+    n.release_idle_inputs = lambda: None
+    n.wait_for_inputs = lambda deadline: None
+    n.check_scan = lambda: None
     return n
 
 
@@ -128,6 +132,10 @@ class WorkflowTests(unittest.TestCase):
         class FakeNode:
             def __init__(self, name, **kw):
                 self.name, self.kw, self.destroyed = name, kw, False
+            def create_subscription(self, *args):
+                return args
+            def destroy_subscription(self, sub):
+                pass
             def destroy_node(self):
                 self.destroyed = True
         class FakeExecutor:
@@ -140,12 +148,13 @@ class WorkflowTests(unittest.TestCase):
                 self.stop.wait(2.)
             def shutdown(self):
                 self.stop.set()
-        owner = NS(context=object(), get_name=lambda: 'mur_base_selector',
+        owner = NS(cfg=dict(m.DEFAULTS), context=object(), get_name=lambda: 'mur_base_selector',
                    get_namespace=lambda: '/', get_parameter=lambda _: NS(value=True))
         with patch.dict(m.__dict__, Node=FakeNode, SingleThreadedExecutor=FakeExecutor,
                         Parameter=lambda name, **kw: NS(name=name, **kw),
-                        Buffer=lambda **kw: NS(**kw),
-                        TransformListener=lambda b, n: NS(unregister=lambda: None),
+                        Buffer=lambda **kw: NS(**kw,clear=lambda:None),
+                        TFMessage=Message, QoSProfile=lambda **kw:NS(**kw),
+                        ReliabilityPolicy=NS(RELIABLE=1),DurabilityPolicy=NS(TRANSIENT_LOCAL=1),
                         ExternalShutdownException=RuntimeError):
             receiver = m.TfReceiver(owner)
             try:

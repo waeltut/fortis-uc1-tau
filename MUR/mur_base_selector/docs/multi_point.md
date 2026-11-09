@@ -86,11 +86,16 @@ are not a per-point evidence array. Candidate visual snapshots show the common
 feasible set with the P1 arm colouring. The separate on-demand score visualizer
 continues to show single-target scores, not multi-point workspace scores.
 
-`reselect` preserves all frozen points and requirements for an array request.
-Single-target topic requests still use the configured `arm_mode` and publish the
-usual outputs. Single-target reselect continues to use the configured arm mode.
-Concurrent requests are rejected. The existing cancel service applies to the
-whole workspace query. Client timeout alone does not cancel server work.
+Selection is service-only: repeat a request by calling `/base_selection/select`
+again. The legacy target-topic trigger, reselect shortcut and selected_pose topic
+are removed. Concurrent requests are rejected. The cancel service applies to the
+whole workspace query; client timeout alone does not cancel server work.
+Diagnostic result, status and visualization publications remain available.
+
+Idle scan/joint/footprint and dynamic TF subscriptions are paused. Each request
+waits for fresh input before lookup. See the README for input warm-up and TF history
+limits. Use zero-stamped targets or already-anchored fixed-frame poses; historical
+TF from before wake-up is not retained.
 
 ## Interactive workflow
 

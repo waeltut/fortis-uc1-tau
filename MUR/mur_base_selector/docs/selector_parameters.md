@@ -13,7 +13,7 @@ ROS `use_sim_time` is supplied by the launch argument (default false).
 | `fixed_frame` | `map` | Frame for anchored target, candidate poses and output paths. |
 | `base_frame` | `base_link` | Mobile-base frame; must match cached base_frame. |
 | `reachability_frame` | `odom` | Intermediate frame used only to explain TF age failures (usually odom). |
-| `arm_mode` | `either` | A configured arm name, either (choose one), or both (independent evidence for all configured arms). Launch argument overrides YAML. |
+| `arm_mode` | `either` | A configured arm name, either (choose one), or both (independent evidence for all configured arms). Used by the score visualizer/internal lookup; service requests specify their own arms. |
 | `service_timeout` | `3.0` | Maximum service wait/call duration, seconds, also bounded by remaining query time. |
 | `planner_action` | `/compute_path_to_pose` | Nav2 ComputePathToPose action name. |
 | `planner_id` | `GridBased` | Planner plugin ID sent to Nav2. |
@@ -26,6 +26,8 @@ ROS `use_sim_time` is supplied by the launch argument (default false).
 | `arm_joints` | `[auto]` | Derive monitored joints from cache group metadata. Explicit overrides must include all cached group joints. |
 | `max_data_age` | `3.0` | Maximum accepted sensor/state/costmap age, seconds. |
 | `tf_timeout` | `0.5` | Maximum TF lookup wait, seconds. |
+| `tf_cache_time` | `10.0` | TF history while active, seconds; dynamic reception/history is paused/cleared when idle. |
+| `input_wait_timeout` | `5.0` | Maximum fresh-input warm-up time, within the overall selection budget. |
 | `footprint_padding` | `0.02` | Extra polygon expansion, metres, applied to the received footprint. |
 | `allow_unknown` | `false` | Allow costmap value 255 through custom footprint/travel checks; Nav2 may still reject unknown space. |
 | `max_path_checks` | `8` | Maximum candidate poses sent to Nav2 per query. One path request per candidate. |

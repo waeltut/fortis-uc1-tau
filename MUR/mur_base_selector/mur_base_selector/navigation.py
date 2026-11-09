@@ -26,7 +26,8 @@ from std_srvs.srv import Trigger
 from nav_msgs.msg import Path
 from nav2_msgs.action import ComputePathToPose
 from nav2_msgs.srv import GetCostmap
-from tf2_ros import Buffer, TransformListener
+from tf2_ros import Buffer
+from tf2_msgs.msg import TFMessage
 from visualization_msgs.msg import Marker, MarkerArray
 
 from .core import (Grid, hull, padded, transform_points, compose, angle,
@@ -50,6 +51,8 @@ DEFAULTS = {
     'arm_joints': ['auto'],
     'max_data_age': 3.0,
     'tf_timeout': 0.5,
+    'tf_cache_time': 10.0,
+    'input_wait_timeout': 5.0,
     'footprint_padding': 0.02,
     'allow_unknown': False,
     'max_path_checks': 60,
@@ -134,10 +137,11 @@ class Candidate:
 
 
 class TfReceiver:
-    """A TF-only node owned by exactly one dedicated executor/thread.
+    """Dedicated TF executor; dynamic traffic is subscribed only while active.
 
-    Never add the selector node to this executor: a node must not be spun by
-    two executors. Explicit clock propagation also supports use_sim_time.
+    Static TF stays subscribed with transient-local QoS so one-shot broadcasters
+    are retained. Pausing clears dynamic history. Epochs reject callbacks already
+    queued when a subscription was destroyed.
     """
     def __init__(self, owner):
         self.node = Node(
@@ -145,12 +149,52 @@ class TfReceiver:
             context=owner.context, use_global_arguments=False,
             parameter_overrides=[Parameter('use_sim_time', value=
                 owner.get_parameter('use_sim_time').value)])
-        self.buffer = Buffer(cache_time=Duration(seconds=120.0), node=self.node)
-        self.listener = TransformListener(self.buffer, self.node)
+        self.buffer = Buffer(cache_time=Duration(seconds=owner.cfg['tf_cache_time']), node=self.node)
+        self.lock = threading.RLock()
+        self.static = {}
+        self.dynamic_subscription = None
+        self.epoch = 0
+        static_qos = QoSProfile(depth=100, reliability=ReliabilityPolicy.RELIABLE,
+                               durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        self.static_subscription = self.node.create_subscription(TFMessage, '/tf_static', self.on_static, static_qos)
         self.executor = SingleThreadedExecutor(context=owner.context)
         self.executor.add_node(self.node)
         self.thread = threading.Thread(target=self.spin, name='mur_selector_tf', daemon=True)
         self.thread.start()
+
+    def on_static(self, msg):
+        with self.lock:
+            for transform in msg.transforms:
+                self.buffer.set_transform_static(transform, 'mur_selector_static')
+                self.static[transform.child_frame_id] = transform
+
+    def activate(self):
+        with self.lock:
+            if self.dynamic_subscription is not None:
+                return
+            self.epoch += 1
+            epoch = self.epoch
+            self.buffer.clear()
+            for transform in self.static.values():
+                self.buffer.set_transform_static(transform, 'mur_selector_static')
+            def receive(msg):
+                with self.lock:
+                    if epoch != self.epoch:
+                        return
+                    for transform in msg.transforms:
+                        self.buffer.set_transform(transform, 'mur_selector_dynamic')
+            qos = QoSProfile(depth=100, reliability=ReliabilityPolicy.RELIABLE)
+            self.dynamic_subscription = self.node.create_subscription(TFMessage, '/tf', receive, qos)
+
+    def pause(self):
+        with self.lock:
+            self.epoch += 1
+            if self.dynamic_subscription is not None:
+                self.node.destroy_subscription(self.dynamic_subscription)
+                self.dynamic_subscription = None
+            self.buffer.clear()
+            for transform in self.static.values():
+                self.buffer.set_transform_static(transform, 'mur_selector_static')
 
     def spin(self):
         try:
@@ -161,7 +205,7 @@ class TfReceiver:
     def close(self):
         self.executor.shutdown()
         self.thread.join()
-        self.listener.unregister()
+        self.pause()
         self.node.destroy_node()
 
 
@@ -181,7 +225,6 @@ class BaseSelector(Node):
         self.stop = threading.Event()
         self.busy = False
         self.worker = None
-        self.last_target = None
         self.footprint = None
         self.joints = {}
         self.scan_seen = None
@@ -197,18 +240,10 @@ class BaseSelector(Node):
                           for name in self.cfg['lifecycle_services']]
         transient = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
                                durability=DurabilityPolicy.TRANSIENT_LOCAL)
-        # Volatile best effort subscriber is compatible with reliable/transient publishers too.
-        sensors = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
-        self.create_subscription(PolygonStamped, self.cfg['footprint_topic'], self.on_footprint, sensors)
-        self.create_subscription(JointState, self.cfg['joint_states_topic'], self.on_joints, sensors)
-        self.create_subscription(LaserScan, self.cfg['scan_topic'], self.on_scan, sensors)
-        self.create_subscription(PoseStamped, '/base_selection/target', self.on_target, 10)
-        self.create_service(Trigger, '/base_selection/reselect', self.reselect)
+        self.initialize_inputs()
         self.create_service(Trigger, '/base_selection/cancel', self.cancel)
         self.status_pub = self.create_publisher(String, '/base_selection/status', transient)
         self.valid_pub = self.create_publisher(Bool, '/base_selection/selected_valid', transient)
-        # Pose is volatile: a late subscriber must not receive an old actionable pose.
-        self.pose_pub = self.create_publisher(PoseStamped, '/base_selection/selected_pose', 10)
         self.path_pub = self.create_publisher(Path, '/base_selection/selected_path', transient)
         self.result_pub = self.create_publisher(String, '/base_selection/result', transient)
         self.markers_pub = self.create_publisher(MarkerArray, '/base_selection/candidate_markers', transient)
@@ -223,7 +258,7 @@ class BaseSelector(Node):
         for k, v in c.items():
             if isinstance(v, (int, float)) and not isinstance(v, bool) and (not math.isfinite(v) or v < 0):
                 raise ValueError(f'{k} must be finite and non-negative')
-        positive = ('service_timeout', 'max_data_age', 'tf_timeout', 'path_timeout',
+        positive = ('service_timeout', 'max_data_age', 'tf_timeout', 'tf_cache_time', 'input_wait_timeout', 'path_timeout',
                     'cancel_timeout', 'path_linear_step', 'path_angular_step',
                     'length_scale', 'selection_ttl', 'max_path_checks')
         if any(c[k] <= 0 for k in positive):
@@ -258,22 +293,100 @@ class BaseSelector(Node):
         self.markers_pub.publish(MarkerArray(markers=[Marker(action=Marker.DELETEALL)]))
         self.diagnostics_pub.publish(String(data=json.dumps({'request_id': self.sequence, 'candidates': []})))
 
-    def expire(self):
+    def initialize_inputs(self):
+        self.input_subscriptions = []
+        self.inputs_active = False
+        self.input_epoch = 0
+
+    def activate_inputs(self):
         with self.lock:
-            expired = self.selection_deadline and time.monotonic() > self.selection_deadline
-            context = self.selected_context
-        if expired:
-            self.invalidate()
-            self.status('expired', 'Selection validity interval expired; submit target or reselect.')
-        elif context is not None:
+            if self.inputs_active:
+                return
+            self.input_epoch += 1
+            epoch = self.input_epoch
+            self.footprint, self.scan_seen, self.joints = None, None, {}
+            self.inputs_active = True
+            qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
             try:
-                self.guard_motion(*context)
-            except Exception as e:
-                with self.lock:
-                    if self.selected_context is not context:
-                        return
+                for kind, topic, callback in (
+                        (PolygonStamped, 'footprint_topic', self.on_footprint),
+                        (JointState, 'joint_states_topic', self.on_joints),
+                        (LaserScan, 'scan_topic', self.on_scan)):
+                    def receive(msg, callback=callback):
+                        with self.lock:
+                            if self.inputs_active and self.input_epoch == epoch:
+                                callback(msg)
+                    self.input_subscriptions.append(self.create_subscription(kind, self.cfg[topic], receive, qos))
+                self.tf_receiver.activate()
+            except Exception:
+                self.pause_inputs()
+                raise
+
+    def pause_inputs(self):
+        with self.lock:
+            self.inputs_active = False
+            self.input_epoch += 1
+            for subscription in self.input_subscriptions:
+                self.destroy_subscription(subscription)
+            self.input_subscriptions.clear()
+            self.tf_receiver.pause()
+            self.footprint, self.scan_seen, self.joints = None, None, {}
+
+    def release_idle_inputs(self):
+        # Called on the owning executor, not from the selection worker.
+        with self.lock:
+            if self.inputs_active and not self.busy and self.selected_context is None:
+                self.pause_inputs()
+
+    def check_scan(self):
+        with self.lock:
+            scan = self.scan_seen
+        if scan is None or time.monotonic()-scan[1] > self.cfg['max_data_age']:
+            raise SelectionError('Missing/stale scan stream')
+        self.check_age(scan[0], 'scan')
+
+    def wait_for_inputs(self, deadline):
+        end = min(deadline, time.monotonic()+self.cfg['input_wait_timeout'])
+        reason = 'No fresh input received'
+        while time.monotonic() < end:
+            self.checkpoint()
+            try:
+                self.check_scan()
+                self.joint_snapshot()
+                self.robot_pose()
+                self.footprint_snapshot()
+                if time.monotonic() >= end:
+                    break
+                return
+            except Exception as error:
+                if isinstance(error, Cancelled):
+                    raise
+                reason = str(error)
+            time.sleep(.02)
+        raise SelectionError('Fresh-input warm-up failed: '+reason)
+
+    def expire(self):
+        try:
+            with self.lock:
+                expired = self.selection_deadline and time.monotonic() > self.selection_deadline
+                context = self.selected_context
+                if expired:
                     self.invalidate()
-                self.status('invalidated', str(e))
+            if expired:
+                self.status('expired', 'Selection validity interval expired; call /base_selection/select again.')
+            elif context is not None:
+                try:
+                    self.guard_motion(*context)
+                    self.check_scan()
+                    self.footprint_snapshot()
+                except Exception as e:
+                    with self.lock:
+                        if self.selected_context is not context:
+                            return
+                        self.invalidate()
+                    self.status('invalidated', str(e))
+        finally:
+            self.release_idle_inputs()
 
     def on_footprint(self, msg):
         with self.lock:
@@ -285,28 +398,13 @@ class BaseSelector(Node):
         now = time.monotonic()
         with self.lock:
             for name, value in zip(msg.name, msg.position):
-                if math.isfinite(value):
+                if name in self.cfg['arm_joints'] and math.isfinite(value):
                     self.joints[name] = (value, now)
 
     def on_scan(self, msg):
         if msg.ranges and msg.header.frame_id:
             with self.lock:
                 self.scan_seen = (copy.deepcopy(msg.header.stamp), time.monotonic())
-
-    def on_target(self, msg):
-        ok, message = self.submit(msg)
-        if not ok:
-            self.get_logger().warning(message)
-
-    def reselect(self, req, res):
-        with self.lock:
-            target = copy.deepcopy(self.last_target)
-        if target is None:
-            res.success, res.message = False, 'Publish /base_selection/target first'
-        else:
-            # The stored target is anchored in fixed_frame with zero stamp.
-            res.success, res.message = self.submit(target)
-        return res
 
     def cancel(self, req, res):
         with self.lock:
@@ -345,8 +443,14 @@ class BaseSelector(Node):
             self.stop.clear()
             self.sequence += 1
             self.invalidate()
-            self.worker = threading.Thread(target=self.run, args=(copy.deepcopy(target), mode, completion), daemon=True)
-            self.worker.start()
+            try:
+                self.activate_inputs()
+                self.worker = threading.Thread(target=self.run, args=(copy.deepcopy(target), mode, completion), daemon=True)
+                self.worker.start()
+            except Exception as error:
+                self.busy = False
+                self.release_idle_inputs()
+                return False, 'Failed to activate selector inputs: '+str(error)
             return True, f'Selection {self.sequence} started'
 
     def checkpoint(self):
@@ -474,11 +578,7 @@ class BaseSelector(Node):
                 if remaining <= 0:
                     raise CheckingBudgetExhausted('Selection budget exhausted while acquiring costmaps')
             return remaining
-        with self.lock:
-            scan = self.scan_seen
-        if scan is None or time.monotonic()-scan[1] > self.cfg['max_data_age']:
-            raise SelectionError('Missing/stale scan stream')
-        self.check_age(scan[0], 'scan')
+        self.check_scan()
         for client in self.lifecycle:
             if not client.wait_for_service(timeout_sec=timeout()):
                 raise SelectionError(f'Unavailable lifecycle service: {client.srv_name}')

@@ -59,7 +59,7 @@ Request `arm`:
 
 - Empty string or `any`: select one available arm (same as `either`).
 - `either`: select one configured arm according to score.
-- A configured name, e.g. `left`: restrict this request to that arm without changing topic behaviour or configuration.
+- A configured name, e.g. `left`: restrict this request to that arm without changing configuration.
 - `both`: require independent cache evidence for every configured arm at the same base pose. This is an intersection query, **not simultaneous multi-arm feasibility**.
 
 Response:
@@ -76,34 +76,82 @@ Response:
 | `valid_for_seconds` | Validity horizon measured from selection, not receipt |
 | `diagnostics_json` | Same successful result metadata as the result topic |
 
-Only use goal/arm/score fields when `success` is true. The service waits for selection, rather than merely acknowledging submission. It uses the same validation and publications as topic requests. Concurrent requests are rejected, not queued. A service client timing out does not cancel server work: explicitly call `/base_selection/cancel` if needed. Budget, service and planner cancellation timeouts can make total response time exceed `selection_budget`; set client timeout with margin.
+Only use goal/arm/score fields when `success` is true. The service waits for selection, rather than merely acknowledging submission. Selection requests are accepted only through this service. Concurrent requests are rejected, not queued. A service client timing out does not cancel server work: explicitly call `/base_selection/cancel` if needed. Budget, service and planner cancellation timeouts can make total response time exceed `selection_budget`; set client timeout with margin.
 
 For Python clients, import `SelectBase` from `mur_base_selector_interfaces.srv`, create a client and use `call_async`. Do not block a mutually exclusive callback that is also needed to receive its response.
 
-## Existing topic interface
+## Service-only selection and diagnostics
+
+Call `/base_selection/select` for both single-point and multi-point requests.
+To repeat a query, submit the same request again. `/base_selection/target`,
+`/base_selection/reselect` and `/base_selection/selected_pose` are not provided.
+The selected destination and per-point arms are returned in the SelectBase response.
+`mur_test` already uses this service and needs no workflow change.
 
 ```bash
-ros2 topic pub --once /base_selection/target geometry_msgs/msg/PoseStamped \
-  '{header: {frame_id: map}, pose: {position: {x: 1.5, y: 0.2, z: 1.0}, orientation: {w: 1.0}}}'
-ros2 service call /base_selection/reselect std_srvs/srv/Trigger '{}'
 ros2 service call /base_selection/cancel std_srvs/srv/Trigger '{}'
 ```
 
-`reselect` preserves all points and requirements after a multi-point request. For a single-target request it uses the default arm mode and the last frozen target.
+The following outputs remain for status and visualization; they do not trigger
+selection or motion:
 
 | Output | Type / purpose |
 |---|---|
-| `/base_selection/selected_pose` | PoseStamped; selected navigation pose |
-| `/base_selection/result` | String JSON; arm, score and evidence |
+| `/base_selection/result` | String JSON; diagnostic result with arm assignments, score and evidence |
 | `/base_selection/selected_valid` | Bool; validity, expiry or invalidation |
-| `/base_selection/selected_path` | nav_msgs/Path; checked planning path |
+| `/base_selection/selected_path` | nav_msgs/Path; checked planning path for display |
 | `/base_selection/status` | String JSON; progress/failure reason |
 | `/base_selection/candidate_diagnostics` | String JSON; candidate states |
 | `/base_selection/candidate_markers` | MarkerArray; candidates |
 | `/base_selection/target_markers` | MarkerArray; requested TCP target |
 | `/base_selection/visualization_data` | String JSON; visualization snapshots |
 
-Service requests also publish these outputs. Avoid running a topic consumer that automatically navigates if the service caller also sends navigation goals; otherwise two coordinators could react to one selection.
+Target markers are published once per request with transient-local durability;
+late subscribers can still receive them. There is no periodic marker republish.
+
+## Idle workload and fresh inputs
+
+When no query is running and no valid selection is being monitored, the node has
+no scan, joint-state or footprint subscriptions and its dedicated TF node has no
+`/tf` subscription. The TF executor waits for events; it does not poll in a busy
+loop. `/tf_static` remains subscribed so fixed transforms from one-shot broadcasters
+are retained. Simulation time may also require `/clock`.
+
+A new service request enables the live subscriptions and waits up to
+`input_wait_timeout` (default 5 s, within the selection budget) for fresh scan,
+required arm joints, base TF and footprint/footprint TF. Idle data is cleared and
+callbacks from a previous subscription epoch cannot satisfy the new request.
+The existing lifecycle, model, costmap, robot-motion and final path validations
+remain in place. Missing inputs fail the request without selecting a destination.
+
+After success, live inputs stay active through the validity interval. The 0.5 s
+monitor checks base/arm motion and scan/footprint freshness; stale inputs,
+movement, cancellation or expiry invalidate the result. Once the worker is
+finished and the result is invalid, subscriptions are removed on the next monitor
+pass. Active requests keep full input frequency; there is no sensor throttling.
+
+`tf_cache_time` defaults to 10 s rather than 120 s. This bounds active TF history;
+pausing `/tf` reception is what removes its idle processing. Dynamic history is
+cleared when paused, while static transforms are retained. Historical target
+stamps before wake-up may be unavailable: use a zero stamp (latest TF) or anchor
+poses in `fixed_frame`, as mur_test does. Requests fail rather than silently using
+a different timestamp.
+
+The optional score visualizer uses the same idle input gating. Its dedicated
+`/base_selection/score_target` input and Trigger service remain separate from the
+selector's service-only interface. Sensor/TF subscriptions stop after calculation;
+completed diagnostic maps stay available.
+
+To inspect the subscriptions, run these while idle, then while a query/result is
+active, and again after validity expires:
+
+```bash
+ros2 node info /mur_base_selector
+ros2 node info /mur_base_selector_tf_listener
+```
+
+This change has offline lifecycle tests, but no measured Jetson CPU reduction.
+Other processes and other subscribers to the same streams are unaffected.
 
 ## Configure a robot
 

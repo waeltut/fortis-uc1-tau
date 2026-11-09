@@ -30,16 +30,14 @@ Use `use_sim_time:=true` only if the robot stack also uses simulation time. The 
 
 ## Target and trigger
 
-After starting the visualizer, publish a target as usual on `/base_selection/target`; the visualizer stores it but does not calculate. The normal selector will still react to that usual topic.
-
-To inspect without triggering normal selection, use the dedicated target input:
+After starting the visualizer, publish to its dedicated target input. It stores the pose without calculating or invoking the selector:
 
 ```bash
 ros2 topic pub --once /base_selection/score_target geometry_msgs/msg/PoseStamped \
   '{header: {frame_id: map}, pose: {position: {x: 1.5, y: 0.2, z: 1.0}, orientation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0}}}'
 ```
 
-These coordinates are an example. Use your intended full TCP pose. The most recently received valid message from either target topic becomes the diagnostic target. Targets published before the diagnostic node started are not recovered. A new target during a calculation is stored for the next trigger; it does not alter the current calculation.
+These coordinates are an example. Use your intended full TCP pose. The most recently received valid message on this topic becomes the diagnostic target. Targets published before the diagnostic node started are not recovered. A new target during a calculation is stored for the next trigger; it does not alter the current calculation.
 
 Calculate once:
 
@@ -155,3 +153,9 @@ Edit `config/score_visualizer.yaml`, then restart only the diagnostic node. If l
 For one arm, launch with `arm_mode:=left` (or your configured name). For one sampled heading, enable the heading filter and use a tight tolerance around a yaw bin. With 24 yaw bins, bin spacing is 15°. The filter selects existing bins rather than generating a new continuous heading.
 
 To compare score weights, use the same target, base pose, map, resolution and fixed `score_max` in each diagnostic run. Supply separately edited selector YAML files to the diagnostic launch; this does not change the running production selector. Metadata includes the complete effective configuration and unclipped score ranges. If many cells clip at 100, raise the scale for **all** runs being compared.
+
+The scan, joint-state, footprint and dynamic TF subscriptions are enabled only
+while calculating. Each trigger waits for fresh data; after calculation they are
+removed on the next 0.5 s idle pass. Static TF remains available. Target poses with
+historical dynamic-transform stamps before wake-up may be unavailable; prefer zero
+stamps or poses already in fixed_frame. Completed grids remain transient-local.

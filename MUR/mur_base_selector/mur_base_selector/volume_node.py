@@ -310,19 +310,10 @@ class VolumeSelector(BaseSelector):
             self.visualization_pub=self.create_publisher(String,'/base_selection/visualization_data',qos)
             self.visualization_snapshot={}
             self.target_markers_pub=self.create_publisher(MarkerArray,'/base_selection/target_markers',qos)
-            self.create_timer(1.0,self.publish_target)
             self.selection_service=self.create_service(SelectBase,'/base_selection/select',self.select_service,callback_group=self.group)
             self.status('idle','Volume selector ready; zero online IK. Selection only; no motion commands.',cache_id=self.volume.meta['cache_id'])
         except Exception:
             self.tf_receiver.close();self.destroy_node();raise
-
-    def reselect(self, req, res):
-        with self.lock:
-            workspace=copy.deepcopy(getattr(self,'last_workspace',None))
-        if workspace is None:
-            return super().reselect(req,res)
-        res.success,res.message=self.submit(*workspace)
-        return res
 
     async def select_service(self, request, response):
         # Awaiting an rclpy Future yields the executor so Nav2/TF/subscriptions
@@ -482,13 +473,12 @@ class VolumeSelector(BaseSelector):
         outcome={'success':False,'message':'Selection interrupted','request_id':self.sequence}
         try:
             self.status('checking','Checking robot state and Nav2; volume reachability uses no IK')
+            self.wait_for_inputs(search_end)
             targets=target if isinstance(target,list) else [target]
             modes=arm_mode if isinstance(arm_mode,list) else [arm_mode or self.cfg['arm_mode']]
             frozen_targets=[self.transform_target(t,self.cfg['fixed_frame']) for t in targets]
             frozen=frozen_targets[0]
-            with self.lock:
-                self.last_workspace=(copy.deepcopy(frozen_targets),list(modes)) if isinstance(target,list) else None
-            with self.lock:self.last_target=copy.deepcopy(frozen);self.visual_target=copy.deepcopy(frozen)
+            with self.lock:self.visual_target=copy.deepcopy(frozen)
             self.visual_stage('checking',goal=[frozen.pose.position.x,frozen.pose.position.y,frozen.pose.position.z])
             self.publish_target();self.check_model(search_end);start,joints=self.robot_pose(),self.joint_snapshot();self.cache_context()
             footprint=self.footprint_snapshot()
@@ -594,7 +584,7 @@ class VolumeSelector(BaseSelector):
             result['arm']=result['point_arms'][0] if len(set(result['point_arms']))==1 else 'mixed'
             with self.lock:
                 self.checkpoint();self.selection_deadline=time.monotonic()+self.cfg['selection_ttl'];self.selected_context=(start,joints)
-                self.result_pub.publish(String(data=json.dumps(result,allow_nan=False)));self.path_pub.publish(path);self.pose_pub.publish(pose);self.valid_pub.publish(Bool(data=True));self.publish_markers(candidates)
+                self.result_pub.publish(String(data=json.dumps(result,allow_nan=False)));self.path_pub.publish(path);self.valid_pub.publish(Bool(data=True));self.publish_markers(candidates)
                 self.status('selected',f'{chosen.arm}: {chosen.length:.2f} m path; cached volume, zero online IK',**result)
                 outcome.update(success=True,message='Selected navigation pose',result=result,pose=pose)
         except Exception as e:

@@ -102,11 +102,9 @@ class ScoreVisualizer(VolumeSelector):
         self.planner = ActionClient(self, ComputePathToPose, self.cfg['planner_action'], callback_group=self.group)
         source = self.volume.meta['context']['source_node'].rstrip('/')
         self.model_client = self.create_client(GetParameters, source+'/get_parameters', callback_group=self.group)
-        sensors = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
-        self.create_subscription(JointState, self.cfg['joint_states_topic'], self.on_joints, sensors)
-        self.create_subscription(LaserScan, self.cfg['scan_topic'], self.on_scan, sensors)
-        self.create_subscription(PolygonStamped, self.cfg['footprint_topic'], self.on_footprint, sensors)
-        self.create_subscription(PoseStamped, '/base_selection/target', self.on_target, 10)
+        self.selected_context = None
+        self.initialize_inputs()
+        self.create_timer(.5, self.release_idle_inputs)
         self.create_subscription(PoseStamped, '/base_selection/score_target', self.on_target, 10)
         qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self.output_groups = ('combined', *self.volume.arm_names)
@@ -147,13 +145,20 @@ class ScoreVisualizer(VolumeSelector):
             if self.busy or self.plan_pending or (self.inflight_plan is not None and not self.inflight_plan.done()):
                 response.success = False; response.message = 'Diagnostic calculation/planner request still busy'
             elif self.last_target is None:
-                response.success = False; response.message = 'Publish /base_selection/score_target or /base_selection/target first'
+                response.success = False; response.message = 'Publish /base_selection/score_target first'
             else:
                 self.sequence += 1
                 self.stop.clear(); self.busy = True
                 target = copy.deepcopy(self.last_target)
-                self.worker = threading.Thread(target=self.calculate, args=(target,), daemon=True)
-                self.worker.start()
+                try:
+                    self.activate_inputs()
+                    self.worker = threading.Thread(target=self.calculate, args=(target,), daemon=True)
+                    self.worker.start()
+                except Exception as error:
+                    self.busy = False
+                    self.release_idle_inputs()
+                    response.success = False; response.message = str(error)
+                    return response
                 response.success = True; response.message = f'Calculation {self.sequence} started; watch {PREFIX}/status'
         return response
 
@@ -212,6 +217,7 @@ class ScoreVisualizer(VolumeSelector):
         try:
             self.clear_outputs(stamp)
             self.status('calculating', 'Acquiring diagnostic target, robot state and costmap snapshot')
+            self.wait_for_inputs(deadline)
             frozen = self.transform_target(target, self.cfg['fixed_frame'])
             self.check_model(deadline); self.cache_context()
             start, joints = self.robot_pose(), self.joint_snapshot()

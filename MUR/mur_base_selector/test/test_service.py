@@ -21,7 +21,8 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(done.calls,1)
         self.assertTrue(done.value['success'])
         self.assertEqual(done.value['result'],workflow.result(n))
-        self.assertEqual(done.value['pose'].pose.position.x,n.pose_pub.messages[-1].pose.position.x)
+        self.assertEqual(done.value['pose'].pose.position.x,done.value['result']['pose'][0])
+        self.assertFalse(n.pose_pub.messages)  # No legacy selected_pose publication
         self.assertFalse(n.busy)
 
     def test_failed_query_never_returns_previous_success(self):

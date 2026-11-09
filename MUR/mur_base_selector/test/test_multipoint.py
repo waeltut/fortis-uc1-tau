@@ -81,14 +81,6 @@ class MultiWorkflowTests(unittest.TestCase):
         self.assertTrue(n.submit([transport.PoseStamped()]*2,['','right'])[0])
         n.worker.join(1);self.assertEqual(seen[0][1],['either','right'])
 
-    def test_reselect_keeps_entire_workspace(self):
-        n=workflow.node();targets=[transport.PoseStamped()]*2
-        n.last_workspace=(targets,['left','right']);seen=[]
-        n.submit=lambda *args:seen.append(args) or (True,'started')
-        response=n.reselect(NS(),NS())
-        self.assertTrue(response.success);self.assertEqual(len(seen[0][0]),2)
-        self.assertEqual(seen[0][1],['left','right'])
-
     def test_mixed_service_reports_union_groups_and_per_point_arms(self):
         async def check():
             n=workflow.node();n.volume.arm_names=['left','right']

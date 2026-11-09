@@ -184,7 +184,7 @@ class MurFootprint(Node):
             'robot_description_topic': '/robot_description',
             'robot_description_file': '',
             'required_links': ['mur', 'left_upper_arm_link', 'right_upper_arm_link'],
-            'publish_rate': 10.0,
+            'publish_rate': 5.0,
             'max_tf_age': 0.5,
             'padding': 0.03,
             'local_footprint_topic': '/local_costmap/footprint',

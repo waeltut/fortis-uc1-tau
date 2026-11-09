@@ -19,6 +19,8 @@ mur_base_selector:
     arm_joints: [auto]  # Derived from cached MoveIt group variable names.
     max_data_age: 3.0
     tf_timeout: 0.5
+    tf_cache_time: 10.0
+    input_wait_timeout: 5.0
     footprint_padding: 0.02
     allow_unknown: false
     max_path_checks: 8
