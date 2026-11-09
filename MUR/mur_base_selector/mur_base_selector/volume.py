@@ -119,7 +119,7 @@ class Volume:
         self.profile_angles=values
 
 
-    def query(self,target,base_z,yaw_bins,min_coverage,max_height_error,max_angle_deg,fov_deg,front_offset_deg,mode,checkpoint=lambda:None,include_profiles=False):
+    def query(self,target,base_z,yaw_bins,min_coverage,max_height_error,max_angle_deg,fov_deg,front_offset_deg,mode,checkpoint=lambda:None,include_profiles=False,base_poses=None):
         if mode not in ('either', 'both', *self.arm_names):raise ValueError('Unknown arm mode: '+mode)
         cfg=self.meta['generation']
         # A larger online FOV cannot recover voxels omitted at generation.
@@ -131,13 +131,34 @@ class Volume:
         # Use only the nearest sampled height layer, without merging optimistic layers.
         dz=np.abs(self.points[height,2]-(p[2]-base_z));nearest_z=self.points[height[int(np.argmin(dz))],2]
         height=height[np.abs(self.points[height,2]-nearest_z)<1e-9]
+        layer=height.copy()
+        if base_poses is not None:
+            voxel=float(cfg['voxel_size'])
+            origin=self.points.min(axis=0)
+            lattice={tuple(np.rint((self.points[i,:2]-origin[:2])/voxel).astype(int)):i for i in layer}
         rows=[]
         for b in range(yaw_bins):
             checkpoint();yaw=2*math.pi*b/yaw_bins
             relative=qmul([0,0,-math.sin(yaw/2),math.cos(yaw/2)],q)
             dots=np.abs(self.quats@relative);oi=int(np.argmax(dots));error=2*math.acos(min(1.,dots[oi]))
             if error>math.radians(max_angle_deg)+1e-12:continue
-            points=self.points[height];bearings=np.arctan2(points[:,1],points[:,0])-math.radians(front_offset_deg)
+            requested=None
+            height=layer
+            if base_poses is not None:
+                requested=np.asarray([v for v in base_poses if abs(angle(v[2]-yaw))<1e-8],dtype=float)
+                if not len(requested):continue
+                cs,sn=math.cos(yaw),math.sin(yaw)
+                delta=p[:2]-requested[:,:2]
+                xy=np.column_stack((cs*delta[:,0]+sn*delta[:,1],-sn*delta[:,0]+cs*delta[:,1]))
+                keys=np.rint((xy-origin[:2])/voxel).astype(int)
+                indices=np.array([lattice.get(tuple(k),-1) for k in keys])
+                keep=indices>=0
+                requested=requested[keep];xy=xy[keep];height=indices[keep]
+                if not len(height):continue
+                points=np.column_stack((xy,np.full(len(xy),p[2]-base_z)))
+            else:
+                points=self.points[height]
+            bearings=np.arctan2(points[:,1],points[:,0])-math.radians(front_offset_deg)
             bearings=np.arctan2(np.sin(bearings),np.cos(bearings))
             good=np.abs(bearings)<=math.radians(fov_deg/2)+1e-12
             # Actual requested axis must satisfy the constraint too, not only its bin centre.
@@ -166,13 +187,15 @@ class Volume:
                 valid |= eligible
             cs,sn=math.cos(yaw),math.sin(yaw)
             bx=p[0]-(cs*points[:,0]-sn*points[:,1]);by=p[1]-(sn*points[:,0]+cs*points[:,1])
+            if requested is not None:
+                bx,by=requested[:,0],requested[:,1]
             for j,idx in enumerate(height):
                 arms=['both'] if mode=='both' and valid[:,j].all() else []
                 if mode!='both':arms=[name for a,name in enumerate(self.arm_names) if valid[a,j] and mode in ('either',name)]
                 for arm in arms:
                     arm_ids=range(len(self.arm_names)) if arm=='both' else (self.arm_names.index(arm),)
                     coverage=float(min(selected_coverage[a,j] for a in arm_ids))
-                    row=((float(bx[j]),float(by[j]),yaw),arm,float(bearings[j]),coverage,float(abs(points[j,2]-(p[2]-base_z))),error)
+                    row=((float(bx[j]),float(by[j]),yaw),arm,float(bearings[j]),coverage,float(abs(self.points[idx,2]-(p[2]-base_z))),error)
                     if include_profiles:
                         evidence={self.arm_names[a]:{'min_inward_angle_deg':float(selected_angles[a,j]),'coverage':float(selected_coverage[a,j]),'allowed_samples':int(selected_counts[a,j])} for a in arm_ids}
                         row+=(evidence,)

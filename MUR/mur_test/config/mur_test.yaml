@@ -1,16 +1,14 @@
 mur_test:
   ros__parameters:
-    target_topic: /base_selection/target
-    selected_pose_topic: /base_selection/selected_pose
-    selection_diagnostics_topic: /base_selection/candidate_diagnostics
-    selection_result_topic: /base_selection/result
+    target_topic: /mur_test/point
+    selection_service: /base_selection/select
+    selection_timeout: 60.0
     navigation_action: /navigate_to_pose
     base_goal_frame: map
     base_frame: base_link
     planning_frame: mur
     commander_action: /arms/move
-    # Automatic arm dispatch after Nav2 succeeds. Only navigation asks for input.
-    confirm_navigation: true
+    # Navigation always asks for confirmation; point selection commands arm movement.
     plan_only: false
     # 0 uses commander defaults; otherwise (0, 1].
     velocity_scaling: 0.1
@@ -19,7 +17,5 @@ mur_test:
     arm_timeout: 180.0
     cancel_timeout: 20.0
     interface_timeout: 15.0
-    pose_wait_timeout: 30.0
-    arm_selection_timeout: 4.0
     commander_wait_timeout: 5.0
     tf_timeout: 5.0

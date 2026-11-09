@@ -1,14 +1,14 @@
-"""MUR test: Nav2 -> actual base pose -> selected-arm MoveArms action.
+"""Collect a workspace, select a shared base via service, navigate and visit points.
 
-MoveIt planning and execution belong to dual_arm_commander, not this node.
-The selected arm is taken ONLY from mur_base_selector's matched JSON result.
-No IK, collision-matrix manipulation, or MoveGroup action is performed here.
+MoveIt planning and execution belong to dual_arm_commander.
 """
 import copy
-import json
 import math
 import threading
 import time
+import select
+import sys
+from mur_base_selector_interfaces.srv import SelectBase
 
 import rclpy
 from rclpy.action import ActionClient
@@ -20,7 +20,6 @@ from geometry_msgs.msg import PoseStamped
 from nav2_msgs.action import NavigateToPose
 from dual_arm_interfaces.action import MoveArms
 from .action_runner import run_action
-from std_msgs.msg import String
 from tf2_geometry_msgs import do_transform_pose
 from tf2_ros import Buffer, TransformException, TransformListener
 
@@ -28,10 +27,9 @@ from tf2_ros import Buffer, TransformException, TransformListener
 class MurTest(Node):
     def __init__(self):
         super().__init__('mur_test')
-        self.declare_parameter('target_topic', '/base_selection/target')
-        self.declare_parameter('selected_pose_topic', '/base_selection/selected_pose')
-        self.declare_parameter('selection_diagnostics_topic', '/base_selection/candidate_diagnostics')
-        self.declare_parameter('selection_result_topic', '/base_selection/result')
+        self.declare_parameter('target_topic', '/mur_test/point')
+        self.declare_parameter('selection_service', '/base_selection/select')
+        self.declare_parameter('selection_timeout', 60.0)
         self.declare_parameter('navigation_action', '/navigate_to_pose')
         self.declare_parameter('base_goal_frame', 'map')
         self.declare_parameter('base_frame', 'base_link')
@@ -42,17 +40,13 @@ class MurTest(Node):
         self.declare_parameter('velocity_scaling', 0.1)
         self.declare_parameter('acceleration_scaling', 0.1)
         self.declare_parameter('plan_only', False)
-        self.declare_parameter('confirm_navigation', True)
         self.declare_parameter('navigation_timeout', 180.0)
         self.declare_parameter('interface_timeout', 15.0)
-        self.declare_parameter('pose_wait_timeout', 30.0)
-        self.declare_parameter('arm_selection_timeout', 4.0)
         self.declare_parameter('commander_wait_timeout', 5.0)
         self.declare_parameter('tf_timeout', 5.0)
 
         self.motion_fault = None
-        for name in ('navigation_timeout', 'interface_timeout', 'pose_wait_timeout',
-                     'arm_selection_timeout', 'commander_wait_timeout', 'tf_timeout',
+        for name in ('navigation_timeout', 'interface_timeout', 'selection_timeout', 'commander_wait_timeout', 'tf_timeout',
                      'arm_timeout', 'cancel_timeout'):
             if not math.isfinite(float(self.p(name))) or float(self.p(name)) <= 0:
                 raise ValueError(name + ' must be finite and positive')
@@ -60,27 +54,18 @@ class MurTest(Node):
             if not 0.0 <= float(self.p(name)) <= 1.0:
                 raise ValueError(name + ' must be in [0, 1]')
         self.lock = threading.Lock()
-        self.target = None
-        self.selected = None
-        self.selected_at = 0.0
-        self.selected_metadata = None
         self.target_generation = 0
 
+        self.pending_points = []
+        self.collecting = True
+        self.selector = self.create_client(SelectBase, self.p('selection_service'))
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
         qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
         self.create_subscription(PoseStamped, self.p('target_topic'), self.on_target, qos)
-        self.create_subscription(PoseStamped, self.p('selected_pose_topic'), self.on_selected, qos)
-        diagnostic_topic = str(self.p('selection_diagnostics_topic')).strip()
-        result_topic = str(self.p('selection_result_topic')).strip()
-        for topic in dict.fromkeys((diagnostic_topic, result_topic)):
-            if topic:
-                self.create_subscription(String, topic, self.on_diagnostics, qos)
-
         self.nav = ActionClient(self, NavigateToPose, self.p('navigation_action'))
         self.commander = ActionClient(self, MoveArms, self.p('commander_action'))
-        self.get_logger().info('Ready: selector arm -> Nav2 -> latest map-to-mur TF -> MoveIt commander.')
-        self.get_logger().info('Arm dispatch is automatic after successful navigation; no arm confirmation.')
+        self.get_logger().info('Ready: place points on /mur_test/point, then confirm the workspace in this terminal.')
 
     def p(self, name):
         return self.get_parameter(name).value
@@ -92,112 +77,24 @@ class MurTest(Node):
         return all(math.isfinite(v) for v in values) and abs(sum(v*v for v in values[3:]) - 1.0) < 0.02
 
     @staticmethod
-    def same_target(a, b):
-        if a.header.frame_id != b.header.frame_id:
-            return False
-        if not MurTest.valid_pose(a.pose) or not MurTest.valid_pose(b.pose):
-            return False
-        pa, pb = a.pose.position, b.pose.position
-        if math.dist((pa.x, pa.y, pa.z), (pb.x, pb.y, pb.z)) > 1e-6:
-            return False
-        qa, qb = a.pose.orientation, b.pose.orientation
-        dot = qa.x * qb.x + qa.y * qb.y + qa.z * qb.z + qa.w * qb.w
-        return abs(abs(dot) - 1.0) < 1e-6
-
-    @staticmethod
     def yaw(q):
         return math.atan2(2.0*(q.w*q.z + q.x*q.y), 1.0 - 2.0*(q.y*q.y + q.z*q.z))
 
     def on_target(self, msg):
-        with self.lock:
-            # The selector periodically republishes the same target: ignore duplicates.
-            if self.target is not None and self.same_target(self.target, msg):
-                return
-            self.target = copy.deepcopy(msg)
-            self.selected = None
-            self.selected_at = 0.0
-            self.selected_metadata = None
-            self.target_generation += 1
-        self.get_logger().info('TCP target received in %s; waiting for base selection.' % msg.header.frame_id)
-
-    def on_selected(self, msg):
-        with self.lock:
-            if self.target is None:
-                return
-            self.selected = copy.deepcopy(msg)
-            self.selected_at = time.monotonic()
-        self.get_logger().info('Selected base: %s (%.3f, %.3f)' % (
-            msg.header.frame_id, msg.pose.position.x, msg.pose.position.y))
-
-    def on_diagnostics(self, msg):
-        try:
-            data = json.loads(msg.data)
-            if not isinstance(data, dict) or data.get('valid') is False:
-                return
-            if data.get('arm') not in ('left', 'right', 'both'):
-                return
-            coords = data.get('pose')
-            if not isinstance(coords, list) or len(coords) < 3:
-                return
-            if not all(math.isfinite(float(v)) for v in coords[:3]):
-                return
-        except (TypeError, ValueError, OverflowError):
+        if not msg.header.frame_id or not self.valid_pose(msg.pose):
+            self.get_logger().error('Point rejected: frame and unit quaternion required')
             return
         with self.lock:
-            if self.target is not None:
-                self.selected_metadata = (data, time.monotonic())
-
-    def matching_arm(self, selected):
-        with self.lock:
-            info, selected_at = self.selected_metadata, self.selected_at
-        if info is None or selected_at <= 0:
-            return None
-        data, metadata_at = info
-        if abs(metadata_at - selected_at) > 5.0:
-            return None
-        if data.get('frame_id', selected.header.frame_id) != selected.header.frame_id:
-            return None
-        x, y, theta = (float(v) for v in data['pose'][:3])
-        if math.hypot(x - selected.pose.position.x, y - selected.pose.position.y) > 0.03:
-            return None
-        diff = theta - self.yaw(selected.pose.orientation)
-        if abs(math.atan2(math.sin(diff), math.cos(diff))) > math.radians(5.0):
-            return None
-        return data['arm']
-
-    def require_selected_arm(self, selected):
-        deadline = time.monotonic() + float(self.p('arm_selection_timeout'))
-        while rclpy.ok() and time.monotonic() < deadline:
-            arm = self.matching_arm(selected)
-            if arm is not None:
-                if arm == 'both':
-                    raise RuntimeError('Selector chose both arms; single-arm dispatcher will not guess.')
-                self.get_logger().info('Locked selected arm: %s' % arm.upper())
-                return arm
-            time.sleep(0.05)
-        raise RuntimeError('No matching selector arm metadata for selected base pose; refusing to guess.')
-
-    def wait_for_selection(self):
-        deadline = time.monotonic() + float(self.p('pose_wait_timeout'))
-        while rclpy.ok() and time.monotonic() < deadline:
-            with self.lock:
-                if self.target is not None and self.selected is not None:
-                    return (self.target_generation, copy.deepcopy(self.target), copy.deepcopy(self.selected))
-            time.sleep(0.1)
-        raise TimeoutError('Waiting for target and selected base pose')
+            if not self.collecting:
+                self.get_logger().warning('Workspace is frozen; point ignored. Use new to collect another workspace.')
+                return
+            self.pending_points.append(copy.deepcopy(msg))
+        self.get_logger().info('New point received; queued for arm assignment in the terminal.')
 
     def check_snapshot(self, generation):
         with self.lock:
             if self.target_generation != generation:
                 raise RuntimeError('New TCP target received during navigation; stale arm command cancelled')
-
-    def discard(self, generation):
-        with self.lock:
-            if self.target_generation == generation:
-                self.target = None
-                self.selected = None
-                self.selected_metadata = None
-                self.selected_at = 0.0
 
     def transform_to(self, pose, frame):
         if not pose.header.frame_id or not self.valid_pose(pose.pose):
@@ -299,50 +196,138 @@ class MurTest(Node):
     def confirm(question):
         return input('\n%s [y/N]: ' % question).strip().lower() in ('y', 'yes')
 
-    def run_console(self):
-        print('\n=== mur_test: Nav2 -> selected arm commander goal ===')
-        print('Navigation confirmation: %s; arm plan_only: %s' % (
-            self.p('confirm_navigation'), self.p('plan_only')))
-        print('Press Ctrl+C to exit.\n')
-        while rclpy.ok() and self.motion_fault is None:
-            generation = None
-            try:
-                generation, target, base = self.wait_for_selection()
-                if not self.valid_pose(target.pose) or not self.valid_pose(base.pose):
-                    raise RuntimeError('Invalid target or base quaternion')
-                print('\nTCP target: %s (%.3f, %.3f, %.3f)' % (
-                    target.header.frame_id, target.pose.position.x,
-                    target.pose.position.y, target.pose.position.z))
-                print('Selected base: %s (%.3f, %.3f)' % (
-                    base.header.frame_id, base.pose.position.x, base.pose.position.y))
-                if self.p('confirm_navigation') and not self.confirm('Navigate MiR to the selected base pose?'):
-                    print('Navigation skipped; waiting for a new target.')
-                    self.discard(generation)
+    def collect_points(self):
+        points, arms = [], []
+        with self.lock:
+            self.collecting = True
+        print('Place points. Each point will ask for any/left/right/both (Enter = any).')
+        print('Type done to confirm, clear to reset, or quit to exit.', flush=True)
+        while rclpy.ok():
+            with self.lock:
+                pending = self.pending_points.pop(0) if self.pending_points else None
+            if pending is not None:
+                try:
+                    anchored = self.transform_to(pending, str(self.p('base_goal_frame')))
+                except Exception as exc:
+                    print('Point rejected: %s' % exc)
                     continue
-                self.check_snapshot(generation)
-                arm = self.require_selected_arm(base)  # Lock before moving; no opposite-arm fallback.
-                # Anchor the requested TCP goal to the map BEFORE driving.
-                tcp_map = self.transform_to(target, str(self.p('base_goal_frame')))
-                base_map = self.transform_to(base, str(self.p('base_goal_frame')))
-                self.check_snapshot(generation)
-                self.navigate(base_map, generation)
-                self.check_snapshot(generation)
-                self.log_actual_arrival(base_map)
-                self.check_snapshot(generation)
-                self.execute_commander_goal(arm, tcp_map, generation)
-                self.discard(generation)
-            except (KeyboardInterrupt, EOFError):
-                break
-            except TimeoutError as exc:
-                if 'Waiting for target' not in str(exc):
-                    self.get_logger().error('Test stopped: %s' % exc)
-                if generation is not None:
-                    self.discard(generation)
-            except Exception as exc:
-                self.get_logger().error('Test stopped: %s' % exc)
-                if generation is not None:
-                    self.discard(generation)
-                print('Re-publish the TCP target to start a new test.')
+                number = len(points) + 1
+                p = anchored.pose.position
+                print('P%d added: (%.3f, %.3f, %.3f) in %s' % (number,p.x,p.y,p.z,anchored.header.frame_id))
+                while True:
+                    arm = input('P%d arm [any/left/right/both; default any]: ' % number).strip().lower() or 'any'
+                    if arm in ('any','left','right','both'): break
+                    print('Choose any, left, right or both.')
+                points.append(anchored); arms.append(arm)
+                continue
+            if not select.select([sys.stdin], [], [], 0.2)[0]: continue
+            line = sys.stdin.readline()
+            if not line: raise EOFError()
+            command = line.strip().lower()
+            if command in ('quit','q'): return None
+            if command == 'clear':
+                points.clear(); arms.clear()
+                with self.lock: self.pending_points.clear()
+                print('Points cleared.'); continue
+            if command == 'done':
+                with self.lock:
+                    if self.pending_points:
+                        print('Assign the queued points first.'); continue
+                    if not points:
+                        print('Add at least one point.'); continue
+                    self.collecting = False
+                    self.target_generation += 1
+                return points, arms
+
+    def select_workspace(self, points, arms):
+        if not self.selector.wait_for_service(timeout_sec=float(self.p('interface_timeout'))):
+            raise RuntimeError('Base selection service unavailable')
+        request = SelectBase.Request()
+        request.targets = points
+        request.arms = arms
+        future = self.selector.call_async(request)
+        deadline = time.monotonic() + float(self.p('selection_timeout'))
+        while rclpy.ok() and not future.done():
+            if time.monotonic() >= deadline:
+                future.cancel()
+                raise TimeoutError('Selection timed out; selector may still be busy. No motion dispatched.')
+            time.sleep(0.05)
+        if not future.done(): raise RuntimeError('ROS shutdown')
+        result = future.result()
+        if not result.success: raise RuntimeError(result.message)
+        if len(result.point_arms) != len(points):
+            raise RuntimeError('Selector returned incomplete point arm assignments')
+        for required, chosen in zip(arms, result.point_arms):
+            if chosen not in ('left','right','both') or (required != 'any' and chosen != required):
+                raise RuntimeError('Selector returned an incompatible arm assignment')
+        return result
+
+    def home(self, generation):
+        if not self.commander.wait_for_server(timeout_sec=float(self.p('commander_wait_timeout'))):
+            raise RuntimeError('MoveArms action unavailable')
+        request = MoveArms.Goal()
+        request.goal_type = 'preset'
+        request.preset = 'home'
+        request.plan_only = bool(self.p('plan_only'))
+        result = self.run_motion(self.commander, request, self.p('arm_timeout'), generation, self.on_arm_feedback)
+        if result.status != GoalStatus.STATUS_SUCCEEDED or result.result.error_code != MoveArms.Result.OK:
+            raise RuntimeError('Home failed: ' + result.result.message)
+        if not request.plan_only and not (result.result.executed and result.result.left_completed and result.result.right_completed):
+            raise RuntimeError('Home did not confirm completion of both arms')
+        print('Home completed.' if not request.plan_only else 'Home plan ready.')
+
+    def run_console(self):
+        print('=== MUR multi-point workspace ===')
+        try:
+            while rclpy.ok() and self.motion_fault is None:
+                collected = self.collect_points()
+                if collected is None: break
+                points, arms = collected
+                generation = self.target_generation
+                try:
+                    result = self.select_workspace(points, arms)
+                    base = self.transform_to(result.navigation_goal, str(self.p('base_goal_frame')))
+                    expiry = time.monotonic() + result.valid_for_seconds
+                    print('Shared base: (%.3f, %.3f). Assignments: %s' % (
+                        base.pose.position.x, base.pose.position.y,
+                        ', '.join('P%d=%s' % (i+1,a) for i,a in enumerate(result.point_arms))))
+                    if not self.confirm('Navigate MiR to this destination?'):
+                        continue
+                    if time.monotonic() >= expiry:
+                        print('Selection expired. Recalculating; confirm the fresh destination.')
+                        result = self.select_workspace(points, arms)
+                        base = self.transform_to(result.navigation_goal, str(self.p('base_goal_frame')))
+                        expiry = time.monotonic() + result.valid_for_seconds
+                        print('Fresh shared base: (%.3f, %.3f)' % (base.pose.position.x,base.pose.position.y))
+                        if not self.confirm('Navigate MiR to this fresh destination?'): continue
+                        if time.monotonic() >= expiry: raise RuntimeError('Selection expired again; retry workspace')
+                    self.navigate(base, generation)
+                    self.log_actual_arrival(base)
+                    while rclpy.ok() and self.motion_fault is None:
+                        print('Points: ' + ', '.join('P%d (%s)' % (i+1,a) for i,a in enumerate(result.point_arms)))
+                        choice = input('Move to P1/P2/..., home, new workspace, or quit: ').strip().lower()
+                        if choice in ('quit','q'): return
+                        if choice == 'new': break
+                        try:
+                            if choice == 'home':
+                                self.home(generation); continue
+                            try: index = int((choice[1:] if choice.startswith('p') else choice)) - 1
+                            except ValueError:
+                                print('Choose a listed point, home, new or quit.'); continue
+                            if not 0 <= index < len(points):
+                                print('Point does not exist.'); continue
+                            arm = result.point_arms[index]
+                            if arm == 'both':
+                                arm = input('Both arms can reach this point. Move left or right: ').strip().lower()
+                                if arm not in ('left','right'):
+                                    print('Choose left or right.'); continue
+                            self.execute_commander_goal(arm, points[index], generation)
+                        except Exception as exc:
+                            self.get_logger().error('Motion failed: %s' % exc)
+                except Exception as exc:
+                    self.get_logger().error('Workspace stopped: %s' % exc)
+        except (KeyboardInterrupt, EOFError):
+            pass
 
 
 def main(args=None):

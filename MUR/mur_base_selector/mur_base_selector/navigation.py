@@ -324,18 +324,23 @@ class BaseSelector(Node):
                 return False, 'Previous planner action is not terminal yet; wait for cancellation/completion.'
             if self.inflight_plan is not None and not self.inflight_plan.done():
                 return False, 'Previous server request still outstanding; wait for it to finish.'
-            if not target.header.frame_id:
-                return False, 'Target requires header.frame_id'
-            try:
-                quaternion(target.pose.orientation)
-                p = target.pose.position
-                if not np.isfinite([p.x, p.y, p.z]).all():
-                    raise ValueError('Non-finite target')
-            except (ValueError, SelectionError) as e:
-                return False, str(e)
-            mode = arm_mode or self.cfg['arm_mode']
-            if hasattr(self, 'volume') and mode not in ('either', 'both', *self.volume.arm_names):
-                return False, 'Unknown arm: '+mode
+            targets=target if isinstance(target,list) else [target]
+            modes=arm_mode if isinstance(arm_mode,list) else [arm_mode or self.cfg['arm_mode']]
+            if not targets or len(targets)!=len(modes):
+                return False, 'targets and arms must have matching nonzero lengths'
+            modes=['either' if m in ('','any') else m for m in modes]
+            for point,mode in zip(targets,modes):
+                if not point.header.frame_id:
+                    return False, 'Target requires header.frame_id'
+                try:
+                    quaternion(point.pose.orientation)
+                    p=point.pose.position
+                    if not np.isfinite([p.x,p.y,p.z]).all():raise ValueError('Non-finite target')
+                except (ValueError,SelectionError) as e:
+                    return False,str(e)
+                if hasattr(self,'volume') and mode not in ('either','both',*self.volume.arm_names):
+                    return False,'Unknown arm: '+mode
+            mode=modes if isinstance(target,list) else modes[0]
             self.busy = True
             self.stop.clear()
             self.sequence += 1

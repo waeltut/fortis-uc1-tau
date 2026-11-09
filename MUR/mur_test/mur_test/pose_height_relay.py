@@ -25,7 +25,7 @@ class PoseHeightRelay(Node):
     def __init__(self) -> None:
         super().__init__('pose_height_relay')
         self.declare_parameter('input_topic', '/goal_pose_2d')
-        self.declare_parameter('output_topic', '/base_selection/target')
+        self.declare_parameter('output_topic', '/mur_test/point')
         self.declare_parameter('height_m', 1.3)
 
         input_topic = self.get_parameter('input_topic').value

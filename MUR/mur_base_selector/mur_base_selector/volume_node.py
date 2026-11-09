@@ -316,11 +316,30 @@ class VolumeSelector(BaseSelector):
         except Exception:
             self.tf_receiver.close();self.destroy_node();raise
 
+    def reselect(self, req, res):
+        with self.lock:
+            workspace=copy.deepcopy(getattr(self,'last_workspace',None))
+        if workspace is None:
+            return super().reselect(req,res)
+        res.success,res.message=self.submit(*workspace)
+        return res
+
     async def select_service(self, request, response):
         # Awaiting an rclpy Future yields the executor so Nav2/TF/subscriptions
         # can progress. Each request owns its completion, including failures.
         completion=Future()
-        accepted,message=self.submit(request.target,request.arm,completion)
+        targets=list(getattr(request,'targets',[]))
+        modes=list(getattr(request,'arms',[]))
+        if targets:
+            if modes and len(modes)!=len(targets):
+                response.success=False;response.message='arms must be empty or match targets length'
+                return response
+            accepted,message=self.submit(targets,modes or ['any']*len(targets),completion)
+        elif modes:
+            response.success=False;response.message='arms requires targets'
+            return response
+        else:
+            accepted,message=self.submit(request.target,request.arm or 'any',completion)
         if not accepted:
             response.success=False;response.message=message
             return response
@@ -330,7 +349,8 @@ class VolumeSelector(BaseSelector):
         if response.success:
             result=outcome['result']
             response.navigation_goal=outcome['pose'];response.arm=result['arm']
-            names=self.volume.arm_names if result['arm']=='both' else [result['arm']]
+            response.point_arms=result.get('point_arms',[result['arm']])
+            names=list(dict.fromkeys(n for a in response.point_arms for n in (self.volume.arm_names if a=='both' else [a])))
             context=self.volume.meta['context']
             response.planning_groups=[context['groups'][name] for name in names]
             response.tcp_frames=[context['tips'][name] for name in names]
@@ -447,6 +467,10 @@ class VolumeSelector(BaseSelector):
         self.cache_context()  # rigid mount identity only; no cached arm posture
 
     def score_candidate(self,c,travel,destination_cost,target):
+        if hasattr(c,'point_rows'):
+            work=sum(working_score(math.hypot(c.pose[0]-g[0],c.pose[1]-g[1]),r[2],r[1],self.cfg)
+                     for g,r in zip(c.point_goals,c.point_rows))/len(c.point_rows)
+            return self.cfg['weight_navigation']*travel/self.cfg['length_scale']+self.cfg['weight_destination_cost']*destination_cost+work
         distance=math.hypot(c.pose[0]-target[0],c.pose[1]-target[1])
         return (self.cfg['weight_navigation']*travel/self.cfg['length_scale']+
                 self.cfg['weight_destination_cost']*destination_cost+
@@ -458,7 +482,12 @@ class VolumeSelector(BaseSelector):
         outcome={'success':False,'message':'Selection interrupted','request_id':self.sequence}
         try:
             self.status('checking','Checking robot state and Nav2; volume reachability uses no IK')
-            frozen=self.transform_target(target,self.cfg['fixed_frame'])
+            targets=target if isinstance(target,list) else [target]
+            modes=arm_mode if isinstance(arm_mode,list) else [arm_mode or self.cfg['arm_mode']]
+            frozen_targets=[self.transform_target(t,self.cfg['fixed_frame']) for t in targets]
+            frozen=frozen_targets[0]
+            with self.lock:
+                self.last_workspace=(copy.deepcopy(frozen_targets),list(modes)) if isinstance(target,list) else None
             with self.lock:self.last_target=copy.deepcopy(frozen);self.visual_target=copy.deepcopy(frozen)
             self.visual_stage('checking',goal=[frozen.pose.position.x,frozen.pose.position.y,frozen.pose.position.z])
             self.publish_target();self.check_model(search_end);start,joints=self.robot_pose(),self.joint_snapshot();self.cache_context()
@@ -469,7 +498,25 @@ class VolumeSelector(BaseSelector):
             p=frozen.pose.position;goal=[p.x,p.y,p.z,*quaternion(frozen.pose.orientation)]
             phase=time.monotonic()
             def checkpoint():self.remaining(search_end,self.cfg['selection_budget'])
-            rows=self.volume.query(goal,base.translation.z,self.cfg['yaw_bins'],self.cfg['minimum_orientation_coverage'],self.cfg['max_height_error'],self.cfg['max_orientation_error_deg'],self.cfg['front_fov_deg'],self.cfg['front_yaw_offset_deg'],arm_mode or self.cfg['arm_mode'],checkpoint,True)
+            rows=self.volume.query(goal,base.translation.z,self.cfg['yaw_bins'],self.cfg['minimum_orientation_coverage'],self.cfg['max_height_error'],self.cfg['max_orientation_error_deg'],self.cfg['front_fov_deg'],self.cfg['front_yaw_offset_deg'],modes[0],checkpoint,True)
+            goals=[[t.pose.position.x,t.pose.position.y,t.pose.position.z,*quaternion(t.pose.orientation)] for t in frozen_targets]
+            assignments={}
+            if len(goals)>1:
+                # Seed a common base-pose lattice from P1, then test every remaining
+                # target at those SAME XY/yaw poses. Independent target grids do not align.
+                options={}
+                for row in rows:options.setdefault(row[0],[]).append(row)
+                def best(group,g):
+                    return min(group,key=lambda r:working_score(math.hypot(r[0][0]-g[0],r[0][1]-g[1]),r[2],r[1],self.cfg))
+                assignments={pose:[best(group,goals[0])] for pose,group in options.items()}
+                for g,mode in zip(goals[1:],modes[1:]):
+                    checkpoint()
+                    if not assignments:break
+                    matches=self.volume.query(g,base.translation.z,self.cfg['yaw_bins'],self.cfg['minimum_orientation_coverage'],self.cfg['max_height_error'],self.cfg['max_orientation_error_deg'],self.cfg['front_fov_deg'],self.cfg['front_yaw_offset_deg'],mode,checkpoint,True,base_poses=list(assignments))
+                    options={}
+                    for row in matches:options.setdefault(row[0],[]).append(row)
+                    assignments={pose:previous+[best(options[pose],g)] for pose,previous in assignments.items() if pose in options}
+                rows=[v[0] for v in assignments.values()]
             timings['lookup_seconds']=time.monotonic()-phase
             self.visual_stage('cache',rows)
             if not rows:raise SelectionError('No volume candidates under current coverage/orientation/height/FOV limits; not proof of unreachability')
@@ -484,6 +531,7 @@ class VolumeSelector(BaseSelector):
                 cell=field.cells(transform_points([pose[:2]],tf))[0]
                 centre_cost=min(int(grid.data[cell[1],cell[0]]),253)/253
                 c.orientation_profiles=row[6] if len(row)>6 else {}
+                if assignments:c.point_rows=assignments[pose];c.point_goals=goals
                 c.preliminary=self.score_candidate(c,c.travel,centre_cost,goal);candidates.append(c)
             self.visual_stage('travel',[r for r,cost in zip(rows,travel) if math.isfinite(cost)],truncated=field.truncated)
             # At an identical base pose, choose the best arm preference before planning.
@@ -540,6 +588,10 @@ class VolumeSelector(BaseSelector):
                     'volume_candidates':len(rows),'ranking_pool':len(candidates),'destination_checks':destinations,'path_checks':paths,'feasible_paths':len(feasible),
                     'travel_field_truncated':field.truncated,'timings':timings,'elapsed_seconds':time.monotonic()-started,'valid_for_seconds':self.cfg['selection_ttl'],
                     'reachability_policy':'self_body_ignore_other_arm_v1','cached_self_body_collision_checked':True,'opposite_arm_collision_checked':False,'optimality_guaranteed':False,'exact_target_ik_verified':False,'environment_arm_collision_checked':False,'combined_arm_collision_checked':False,'joint_solutions':[]}
+            result['point_arms']=[r[1] for r in chosen.point_rows] if hasattr(chosen,'point_rows') else [chosen.arm]
+            result['point_requirements']=modes
+            result['point_targets']=goals
+            result['arm']=result['point_arms'][0] if len(set(result['point_arms']))==1 else 'mixed'
             with self.lock:
                 self.checkpoint();self.selection_deadline=time.monotonic()+self.cfg['selection_ttl'];self.selected_context=(start,joints)
                 self.result_pub.publish(String(data=json.dumps(result,allow_nan=False)));self.path_pub.publish(path);self.pose_pub.publish(pose);self.valid_pub.publish(Bool(data=True));self.publish_markers(candidates)

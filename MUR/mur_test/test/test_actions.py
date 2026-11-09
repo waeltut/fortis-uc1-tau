@@ -108,3 +108,65 @@ class ProtocolTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+class WorkspaceTests(unittest.TestCase):
+    def methods(self):
+        import copy, math, threading, time
+        tree=ast.parse((ROOT/'mur_test/test_node.py').read_text())
+        cls=next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='MurTest')
+        env=dict(copy=copy,math=math,threading=threading,time=time,
+                 rclpy=NS(ok=lambda:True),SelectBase=NS(Request=NS),
+                 MoveArms=NS(Goal=NS,Result=NS(OK=0)),GoalStatus=NS(STATUS_SUCCEEDED=4))
+        methods=[m for m in cls.body if isinstance(m,ast.FunctionDef)]
+        for m in methods:
+            m.decorator_list=[]
+        exec(compile(ast.Module(body=methods,type_ignores=[]),'<coordinator>','exec'),env)
+        return env
+
+    def test_service_sends_all_points_and_rejects_wrong_assignments(self):
+        env=self.methods();requests=[]
+        response=NS(success=True,point_arms=['left','right'])
+        node=NS(p=lambda k:1.,selector=NS(wait_for_service=lambda **k:True,
+                call_async=lambda req:requests.append(req) or ready(response)))
+        points=[object(),object()]
+        self.assertIs(env['select_workspace'](node,points,['any','right']),response)
+        self.assertEqual(requests[0].targets,points)
+        self.assertEqual(requests[0].arms,['any','right'])
+        response.point_arms=['right','left']
+        with self.assertRaisesRegex(RuntimeError,'incompatible'):
+            env['select_workspace'](node,points,['any','right'])
+        response.point_arms=['left']
+        with self.assertRaisesRegex(RuntimeError,'incomplete'):
+            env['select_workspace'](node,points,['any','right'])
+
+    def test_home_uses_preset_action_and_requires_both_completions(self):
+        env=self.methods();sent=[]
+        result=NS(error_code=0,executed=True,left_completed=True,right_completed=True)
+        node=NS(p=lambda k:False if k=='plan_only' else 1.,on_arm_feedback=None,
+                commander=NS(wait_for_server=lambda **k:True),
+                run_motion=lambda c,g,*a:sent.append(g) or NS(status=4,result=result))
+        env['home'](node,1)
+        self.assertEqual((sent[0].goal_type,sent[0].preset),('preset','home'))
+        result.right_completed=False
+        with self.assertRaisesRegex(RuntimeError,'both arms'):env['home'](node,1)
+
+    def test_collection_assigns_defaults_and_freezes(self):
+        from unittest.mock import patch
+        import io,threading
+        env=self.methods()
+        point=NS(header=NS(frame_id='map'),pose=NS(position=NS(x=1.,y=2.,z=1.3)))
+        env.update(select=NS(select=lambda *a:([1],[],[])),sys=NS(stdin=io.StringIO('done\n')))
+        node=NS(lock=threading.Lock(),pending_points=[point,point],collecting=True,
+                target_generation=0,p=lambda k:'map',transform_to=lambda p,f:p)
+        with patch('builtins.input',side_effect=['','right']):
+            points,arms=env['collect_points'](node)
+        self.assertEqual(arms,['any','right']);self.assertEqual(len(points),2)
+        self.assertFalse(node.collecting);self.assertEqual(node.target_generation,1)
+
+    def test_motion_phase_does_not_mutate_workspace(self):
+        import threading
+        env=self.methods();warnings=[]
+        node=NS(lock=threading.Lock(),collecting=False,pending_points=[],
+                valid_pose=lambda p:True,get_logger=lambda:NS(warning=warnings.append,error=warnings.append,info=warnings.append))
+        env['on_target'](node,NS(header=NS(frame_id='map'),pose=object()))
+        self.assertEqual(node.pending_points,[]);self.assertIn('frozen',warnings[0])

@@ -40,7 +40,13 @@ ros2 launch mur_base_selector base_selector.launch.py
 
 `selector_config` selects the online YAML. `arm_mode` defaults to `either` and overrides the YAML value; it can name an individual configured arm or `both`. `use_sim_time` must match the robot stack.
 
-## Request/response service
+## Multi-point request/response service
+
+See [multi_point.md](docs/multi_point.md) for array requests, arm requirements,
+intersection/scoring details and the interactive mur_test workflow. All clients
+and servers must rebuild against the changed SelectBase interface.
+
+The legacy single-target request fields remain supported:
 
 ```bash
 ros2 service call /base_selection/select mur_base_selector_interfaces/srv/SelectBase \
@@ -51,7 +57,7 @@ Target coordinates are an example, not a prescribed robot motion. The target is 
 
 Request `arm`:
 
-- Empty string: use the configured `arm_mode`.
+- Empty string or `any`: select one available arm (same as `either`).
 - `either`: select one configured arm according to score.
 - A configured name, e.g. `left`: restrict this request to that arm without changing topic behaviour or configuration.
 - `both`: require independent cache evidence for every configured arm at the same base pose. This is an intersection query, **not simultaneous multi-arm feasibility**.
@@ -63,7 +69,8 @@ Response:
 | `success`, `message` | Success or an explicit failure/busy/cancellation explanation |
 | `request_id` | Accepted request sequence; rejected requests use zero |
 | `navigation_goal` | Selected `PoseStamped` in `fixed_frame`, ready for a separate Nav2 client |
-| `arm` | Selected configured name, or `both` for an intersection query |
+| `arm` | Common resolved arm, `both`, or `mixed` for differing point assignments |
+| `point_arms` | One resolved arm per target in request order; authoritative for multi-point dispatch |
 | `planning_groups`, `tcp_frames` | Corresponding MoveIt group(s) and TCP link(s) from cache metadata |
 | `score` | Lower is better; selection is bounded and not globally optimal |
 | `valid_for_seconds` | Validity horizon measured from selection, not receipt |
@@ -82,7 +89,7 @@ ros2 service call /base_selection/reselect std_srvs/srv/Trigger '{}'
 ros2 service call /base_selection/cancel std_srvs/srv/Trigger '{}'
 ```
 
-`reselect` acknowledges asynchronous submission using the default arm mode and the last frozen target. It does not preserve a previous per-service arm override.
+`reselect` preserves all points and requirements after a multi-point request. For a single-target request it uses the default arm mode and the last frozen target.
 
 | Output | Type / purpose |
 |---|---|

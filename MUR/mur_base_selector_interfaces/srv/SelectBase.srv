@@ -1,7 +1,12 @@
 # TCP goal. Orientation is required; use a unit quaternion.
 geometry_msgs/PoseStamped target
-# Empty: configured default; either: any arm; or a configured name. both: intersection.
+# Empty/any/either: one available arm; a configured name: required arm; both: intersection.
 string arm
+# Multi-point request: nonempty targets supersedes target/arm above.
+geometry_msgs/PoseStamped[] targets
+# Empty array = all any. Otherwise one entry per target; empty entry = any.
+# any/either, left, right, both (or configured arm names).
+string[] arms
 ---
 bool success
 string message
@@ -14,3 +19,6 @@ string[] tcp_frames
 float64 score
 float64 valid_for_seconds
 string diagnostics_json
+
+# One resolved arm per target, in request order. both means individually reachable.
+string[] point_arms
