@@ -1,12 +1,32 @@
-cmake_minimum_required(VERSION 3.8)
+cmake_minimum_required(VERSION 3.19)
 project(dual_arm_commander)
 find_package(ament_cmake REQUIRED)
 find_package(ament_cmake_python REQUIRED)
 ament_python_install_package(${PROJECT_NAME})
+# ament discovers the interpreter only; pybind11 also needs the module
+# development component to define Python3_add_library.
+find_package(Python3 REQUIRED COMPONENTS Interpreter Development.Module)
+set(PYBIND11_FINDPYTHON ON)
+find_package(pybind11_vendor REQUIRED)
+find_package(pybind11 REQUIRED)
+find_package(moveit_core REQUIRED)
+find_package(urdf REQUIRED)
+find_package(srdfdom REQUIRED)
+pybind11_add_module(_clearance src/clearance.cpp)
+target_compile_features(_clearance PRIVATE cxx_std_17)
+ament_target_dependencies(_clearance PUBLIC moveit_core urdf srdfdom)
+ament_get_python_install_dir(PYTHON_INSTALL_DIR)
+install(TARGETS _clearance LIBRARY DESTINATION ${PYTHON_INSTALL_DIR}/${PROJECT_NAME})
+file(CHMOD "${CMAKE_CURRENT_SOURCE_DIR}/scripts/arm_commander"
+           "${CMAKE_CURRENT_SOURCE_DIR}/scripts/move_preset"
+  PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
 install(PROGRAMS scripts/arm_commander scripts/move_preset DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY config DESTINATION share/${PROJECT_NAME})
 if(BUILD_TESTING)
   find_package(ament_cmake_pytest REQUIRED)
+  ament_add_pytest_test(test_clearance_native test/test_clearance_native.py
+    APPEND_ENV PYTHONPATH=${CMAKE_CURRENT_BINARY_DIR})
+  ament_add_pytest_test(test_path_check test/test_path_check.py)
   ament_add_pytest_test(test_config test/test_config.py)
   ament_add_pytest_test(test_lifecycle test/test_lifecycle.py)
   ament_add_pytest_test(test_orchestration test/test_orchestration.py)

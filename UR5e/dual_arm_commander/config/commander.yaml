@@ -6,6 +6,18 @@ dual_arm_commander:
     execute_action: /execute_trajectory
     ik_service: /compute_ik
     scene_service: /get_planning_scene
+    state_validity_service: /check_state_validity
+    # Fallback runs only after normal planning fails AND cross-arm target
+    # collision is confirmed. No extra service calls for successful plans.
+    auto_move_blocking_arm: true
+    avoidance_budget: 15.0
+    # Minimum modelled cross-arm separation on sampled fallback paths (metres).
+    avoidance_clearance: 0.05
+    avoidance_path_joint_step: 0.01
+    avoidance_path_max_samples: 5000
+    # Maximum final displacement per joint (radians), not a path constraint.
+    avoidance_max_joint_offset: 0.7
+    avoidance_max_candidates: 96
     left_tcp: left_tcp
     right_tcp: right_tcp
     velocity_scaling: 0.10

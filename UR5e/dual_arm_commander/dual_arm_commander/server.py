@@ -1,6 +1,7 @@
 """Action-only dual-arm commander. All actual movement goes through MoveIt."""
 import copy
 import math
+import itertools
 import random
 import threading
 import time
@@ -17,10 +18,16 @@ from geometry_msgs.msg import PoseStamped
 from sensor_msgs.msg import JointState
 from moveit_msgs.action import MoveGroup, ExecuteTrajectory
 from moveit_msgs.msg import Constraints, JointConstraint, RobotState, RobotTrajectory, PlanningSceneComponents
-from moveit_msgs.srv import GetPositionIK, GetPlanningScene
+from moveit_msgs.srv import GetPositionIK, GetPlanningScene, GetStateValidity
 from dual_arm_interfaces.action import MoveArms
 from .config import SIDES, joints, choice, load_presets, validate
 from .lifecycle import MotionError, Canceled, run_action, wait_future
+from .path_check import samples
+
+
+# MoveIt can return generic FAILURE for an unsampleable colliding goal.
+# These codes permit diagnosis only; they are never collision evidence.
+DIAGNOSABLE_PLAN_ERRORS = frozenset((-1, -12, 99999))
 
 
 class Commander(Node):
@@ -31,6 +38,11 @@ class Commander(Node):
             'action_name': '/arms/move', 'joint_states_topic': '/joint_states',
             'move_group_action': '/move_action', 'execute_action': '/execute_trajectory',
             'ik_service': '/compute_ik', 'scene_service': '/get_planning_scene',
+            'state_validity_service': '/check_state_validity',
+            'auto_move_blocking_arm': True, 'avoidance_budget': 15.0,
+            'avoidance_max_joint_offset': 0.7, 'avoidance_max_candidates': 96,
+            'avoidance_clearance': 0.05, 'avoidance_path_joint_step': 0.01,
+            'avoidance_path_max_samples': 5000,
             'left_group': 'left_ur_manipulator', 'right_group': 'right_ur_manipulator',
             'dual_group': 'both_ur_manipulator',
             'left_tcp': 'left_tcp', 'right_tcp': 'right_tcp',
@@ -47,17 +59,27 @@ class Commander(Node):
         self.p = {name: self.get_parameter(name).value for name in defaults}
         for name in ('planning_time', 'ik_timeout', 'planning_budget', 'execution_timeout',
                      'response_timeout', 'cancel_timeout', 'state_max_age',
-                     'joint_tolerance', 'start_tolerance'):
+                     'joint_tolerance', 'start_tolerance', 'avoidance_budget',
+                     'avoidance_max_joint_offset', 'avoidance_path_joint_step'):
             if not math.isfinite(self.p[name]) or self.p[name] <= 0:
                 raise ValueError(f'{name} must be finite and positive')
+        if not math.isfinite(self.p['avoidance_clearance']) or self.p['avoidance_clearance'] < 0:
+            raise ValueError('avoidance_clearance must be finite and non-negative')
+        if not 2 <= self.p['avoidance_path_max_samples'] <= 20000:
+            raise ValueError('avoidance_path_max_samples must be in 2..20000')
         for name in ('planning_attempts', 'ik_attempts'):
             if not 1 <= self.p[name] <= 64:
                 raise ValueError(f'{name} must be in 1..64')
+        if not 1 <= self.p['avoidance_max_candidates'] <= 512:
+            raise ValueError('avoidance_max_candidates must be in 1..512')
         for name in ('velocity_scaling', 'acceleration_scaling'):
             if not math.isfinite(self.p[name]) or not 0 < self.p[name] <= 1:
                 raise ValueError(f'{name} must be in (0,1]')
         self.presets = load_presets(self.p['presets_file'], self.p)
         model = ET.fromstring(self.p['robot_description'])
+        self.arm_links = {side: {link.get("name") for link in model.findall("link")
+                                 if link.get("name", "").startswith(side + "_")}
+                          for side in SIDES}
         self.bounds = {}
         for joint in model.findall('joint'):
             if joint.get('type') in ('revolute', 'prismatic'):
@@ -86,6 +108,8 @@ class Commander(Node):
         self.executor_client = ActionClient(self, ExecuteTrajectory, self.p['execute_action'], callback_group=self.group)
         self.ik = self.create_client(GetPositionIK, self.p['ik_service'], callback_group=self.group)
         self.scene = self.create_client(GetPlanningScene, self.p['scene_service'], callback_group=self.group)
+        self.validity = self.create_client(GetStateValidity, self.p['state_validity_service'],
+                                           callback_group=self.group)
         self.plan_pub = self.create_publisher(RobotTrajectory, '/arms/planned_trajectory', 10)
         self.server = ActionServer(self, MoveArms, self.p['action_name'],
             execute_callback=self.execute, goal_callback=self.on_goal,
@@ -264,6 +288,7 @@ class Commander(Node):
         start = self.measured()
         deadline = time.monotonic() + self.p['planning_budget']
         attempts = self.p['ik_attempts'] if data['target_type'] == 'pose' else 1
+        blocked_candidates = []
         last_error = MotionError(4, 'No valid motion plan')
         for attempt in range(attempts):
             self.check_cancel()
@@ -280,41 +305,217 @@ class Commander(Node):
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
-            goal = MoveGroup.Goal()
-            request = goal.request
-            request.group_name = self.p['dual_group'] if len(sides) == 2 else self.p[f'{sides[0]}_group']
-            request.pipeline_id = self.p['pipeline_id']
-            request.planner_id = self.p['planner_id']
-            request.start_state = start  # Never use randomized IK seed as motion start.
-            request.num_planning_attempts = self.p['planning_attempts']
-            request.allowed_planning_time = min(self.p['planning_time'], remaining)
-            request.max_velocity_scaling_factor = data['velocity_scaling']
-            request.max_acceleration_scaling_factor = data['acceleration_scaling']
-            constraints = Constraints()
-            for name, value in targets.items():
-                joint = JointConstraint()
-                joint.joint_name, joint.position = name, float(value)
-                joint.tolerance_above = joint.tolerance_below = self.p['joint_tolerance']
-                joint.weight = 1.0
-                constraints.joint_constraints.append(joint)
-            request.goal_constraints = [constraints]
-            goal.planning_options.plan_only = True
-            goal.planning_options.planning_scene_diff.is_diff = True
-            goal.planning_options.planning_scene_diff.robot_state.is_diff = True
-            response = self.remote(self.planner, goal, remaining)
-            code = response.result.error_code.val
-            if response.status == GoalStatus.STATUS_SUCCEEDED and code == 1:
-                trajectory = response.result.planned_trajectory
-                if not trajectory.joint_trajectory.points:
-                    raise MotionError(4, 'MoveIt returned an empty trajectory')
-                return trajectory, start
-            last_error = MotionError(4, 'MoveIt planning failed', code)
+            try:
+                return self.plan_targets(data, sides, start, targets, remaining), start
+            except MotionError as exc:
+                if exc.code != 4:
+                    raise
+                last_error = exc
+                # Retain candidates only; no extra services on the normal path.
+                if exc.moveit_code in DIAGNOSABLE_PLAN_ERRORS:
+                    blocked_candidates.append(targets)
+        last_error.blocked_candidates = blocked_candidates
         raise last_error
+
+    def plan_targets(self, data, sides, start, targets, remaining):
+        self.check_cancel()
+        if remaining <= 0:
+            raise MotionError(4, 'Planning budget exhausted')
+        goal = MoveGroup.Goal()
+        request = goal.request
+        request.group_name = self.p['dual_group'] if len(sides) == 2 else self.p[f'{sides[0]}_group']
+        request.pipeline_id = self.p['pipeline_id']
+        request.planner_id = self.p['planner_id']
+        request.start_state = start  # Never use randomized IK seed as motion start.
+        request.num_planning_attempts = self.p['planning_attempts']
+        request.allowed_planning_time = min(self.p['planning_time'], remaining)
+        request.max_velocity_scaling_factor = data['velocity_scaling']
+        request.max_acceleration_scaling_factor = data['acceleration_scaling']
+        constraints = Constraints()
+        for name, value in targets.items():
+            joint = JointConstraint()
+            joint.joint_name, joint.position = name, float(value)
+            joint.tolerance_above = joint.tolerance_below = self.p['joint_tolerance']
+            joint.weight = 1.0
+            constraints.joint_constraints.append(joint)
+        request.goal_constraints = [constraints]
+        goal.planning_options.plan_only = True
+        goal.planning_options.planning_scene_diff.is_diff = True
+        goal.planning_options.planning_scene_diff.robot_state.is_diff = True
+        response = self.remote(self.planner, goal, remaining)
+        code = response.result.error_code.val
+        if response.status == GoalStatus.STATUS_SUCCEEDED and code == 1:
+            trajectory = response.result.planned_trajectory
+            if not trajectory.joint_trajectory.points:
+                raise MotionError(4, 'MoveIt returned an empty trajectory')
+            return trajectory
+        raise MotionError(4, 'MoveIt planning failed', code)
+
+    def state_validity(self, start, targets, deadline):
+        self.check_cancel()
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise MotionError(4, 'Blocking-arm fallback budget exhausted')
+        if not self.validity.wait_for_service(timeout_sec=min(0.5, remaining)):
+            raise MotionError(2, 'State validity service unavailable')
+        req = GetStateValidity.Request()
+        req.robot_state = copy.deepcopy(start)
+        values = dict(zip(start.joint_state.name, start.joint_state.position))
+        values.update(targets)
+        req.robot_state.joint_state.name = list(values)
+        req.robot_state.joint_state.position = list(values.values())
+        # Empty group checks the whole robot, including hands and attached objects.
+        req.group_name = ''
+        return wait_future(self.validity.call_async(req),
+                           min(self.p['response_timeout'], max(0.001, deadline-time.monotonic())),
+                           self.canceled)
+
+    def only_cross_arm_contacts(self, reply):
+        if reply.valid or not reply.contacts:
+            return False
+        for contact in reply.contacts:
+            a, b = contact.contact_body_1, contact.contact_body_2
+            # Require actual URDF links, not an obstacle with a left_/right_ name.
+            if not ((a in self.arm_links['left'] and b in self.arm_links['right']) or
+                    (b in self.arm_links['left'] and a in self.arm_links['right'])):
+                return False
+        return True
+
+    def retreat_has_clearance(self, start, targets):
+        clearance = self.p['avoidance_clearance']
+        if clearance == 0:
+            return True
+        try:
+            if not hasattr(self, '_clearance_checker'):
+                from ._clearance import ClearanceChecker
+                self._clearance_checker = ClearanceChecker(self.p['robot_description'])
+            values = dict(zip(start.joint_state.name, start.joint_state.position))
+            values.update(targets)
+            return self._clearance_checker.has_clearance(values, clearance)
+        except Exception as exc:
+            raise MotionError(4, f'Cannot check blocking-arm clearance: {exc}') from exc
+
+    def path_has_clearance(self, start, trajectory, sides, deadline):
+        first = True
+        initial = dict(zip(start.joint_state.name, start.joint_state.position))
+        if not self.retreat_has_clearance(start, initial):
+            return False
+        for point in samples(trajectory, [n for side in sides for n in joints(side)],
+                             self.p['avoidance_path_joint_step'],
+                             self.p['avoidance_path_max_samples']):
+            self.check_cancel()
+            if time.monotonic() >= deadline:
+                raise MotionError(4, 'Blocking-arm fallback budget exhausted')
+            if first and any(abs(v-initial[n]) > self.p['start_tolerance']
+                             for n, v in point.items()):
+                raise MotionError(4, 'Avoidance trajectory start differs from planning state')
+            first = False
+            if not self.retreat_has_clearance(start, point):
+                return False
+        return True
+
+    def retreat_candidates(self, side, start):
+        current = dict(zip(start.joint_state.name, start.joint_state.position))
+        names = joints(side)
+        offsets = []
+        for scale in (0.25, 0.5, 1.0):
+            step = scale * self.p['avoidance_max_joint_offset']
+            # Single-joint adjustments plus proximal joint pairs, smallest first.
+            for i in range(6):
+                for sign in (-1, 1):
+                    offsets.append({names[i]: sign * step})
+            for i, j in itertools.combinations(range(3), 2):
+                for a, b in itertools.product((-1, 1), repeat=2):
+                    offsets.append({names[i]: a*step, names[j]: b*step})
+        offsets.sort(key=lambda delta: sum(v*v for v in delta.values()))
+        for delta in offsets[:self.p['avoidance_max_candidates']]:
+            target = {name: current[name] + delta.get(name, 0.0) for name in names}
+            if all(self.bounds[n][0] <= v <= self.bounds[n][1] for n, v in target.items()):
+                yield target
+
+    def plan_with_fallback(self, handle, data, sides):
+        try:
+            trajectory, start = self.plan(handle, data, sides)
+            return trajectory, start, sides
+        except MotionError as original:
+            candidates = getattr(original, 'blocked_candidates', ())
+            if (original.code != 4 or original.moveit_code not in DIAGNOSABLE_PLAN_ERRORS or
+                    not self.p['auto_move_blocking_arm'] or len(sides) != 1 or
+                    data['mode'] not in SIDES or not candidates or self.fault_message):
+                raise
+            # Nothing below runs for a successful single-arm plan, IK-only failure,
+            # timeout, explicit both-arm request, or a sequential preset step.
+            self.feedback(handle, 'checking_blocker', sides,
+                          f'Single-arm planning failed (MoveIt {original.moveit_code}); '
+                          'checking target collision contacts')
+            deadline = time.monotonic() + self.p['avoidance_budget']
+            start = self.measured()
+
+            def diagnose(target, label):
+                self.feedback(handle, 'checking_blocker', sides, label)
+                started = time.monotonic()
+                try:
+                    reply = self.state_validity(start, target, deadline)
+                except MotionError as exc:
+                    if exc.code == 7:
+                        raise MotionError(7, f'{label}: /check_state_validity timed out '
+                                          f'after {time.monotonic()-started:.2f} s') from exc
+                    raise
+                self.feedback(handle, 'checking_blocker', sides,
+                              f'{label}: valid={reply.valid}, '
+                              f'{time.monotonic()-started:.3f} s')
+                return reply
+
+            if not diagnose({}, 'Current state').valid:
+                raise MotionError(4, 'Current robot state is invalid; no automatic retreat')
+            blocked = []
+            for index, target in enumerate(candidates, 1):
+                if self.only_cross_arm_contacts(diagnose(target, f'Target candidate {index}')):
+                    blocked.append(target)
+                    # One verified obstruction is sufficient. Contact/cost generation
+                    # for overlapping meshes can take seconds per candidate.
+                    break
+            if not blocked:
+                self.feedback(handle, 'avoidance_skipped', sides,
+                              'No target with exclusively cross-arm collision contacts; '
+                              'other arm will not move')
+                raise original
+            other = 'right' if sides[0] == 'left' else 'left'
+            self.feedback(handle, 'planning_avoidance', SIDES,
+                          f'{other} arm blocks the requested target; planning simultaneous motion '
+                          f'with {self.p["avoidance_clearance"]:.3f} m sampled clearance')
+            for retreat in self.retreat_candidates(other, start):
+                for target in blocked:
+                    self.check_cancel()
+                    if time.monotonic() >= deadline:
+                        raise MotionError(4, 'Blocking-arm fallback budget exhausted')
+                    combined = dict(target, **retreat)
+                    if not self.retreat_has_clearance(start, combined):
+                        continue
+                    # MoveIt validates the endpoint AND the complete trajectory.
+                    # Avoid a redundant, expensive contact/cost service call here.
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise MotionError(4, 'Blocking-arm fallback budget exhausted')
+                    try:
+                        trajectory = self.plan_targets(data, SIDES, start, combined, remaining)
+                    except MotionError as exc:
+                        if exc.code != 4 or exc.moveit_code not in DIAGNOSABLE_PLAN_ERRORS:
+                            raise
+                        continue
+                    if not self.path_has_clearance(start, trajectory, SIDES, deadline):
+                        continue
+                    self.check_cancel()
+                    if time.monotonic() >= deadline:
+                        raise MotionError(4, 'Blocking-arm fallback budget exhausted')
+                    return trajectory, start, SIDES
+            raise MotionError(4, 'Other arm blocks target; no simultaneous retreat meeting clearance found',
+                              original.moveit_code)
 
     def run_step(self, handle, data, sides, result, plan_only):
         self.check_cancel()
         self.check_scene()
-        trajectory, start = self.plan(handle, data, sides)
+        trajectory, start, moving_sides = self.plan_with_fallback(handle, data, sides)
         self.plan_pub.publish(trajectory)
         self.check_cancel()
         if plan_only:
@@ -326,7 +527,7 @@ class Commander(Node):
             if abs(current[name] - original[name]) > self.p['start_tolerance']:
                 raise MotionError(2, f'Robot moved during planning: {name}; submit a fresh goal')
         self.check_scene()
-        self.feedback(handle, 'executing', sides)
+        self.feedback(handle, 'executing', moving_sides)
         goal = ExecuteTrajectory.Goal()
         goal.trajectory = trajectory
         # Let MoveIt choose configured controllers, including fake-hardware names.

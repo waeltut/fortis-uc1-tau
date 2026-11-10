@@ -28,7 +28,7 @@ joint posture from the original SRDF. Neither controls fingers.
 ros2 action send_goal /arms/move dual_arm_interfaces/action/MoveArms \
   '{goal_type: explicit, mode: left, target_type: pose,
     left_target: {header: {frame_id: mur}, pose: {
-      position: {x: 0.6, y: 0.35, z: 1.2},
+      position: {x: 0.6, y: 0.15, z: 1.2},
       orientation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0}}},
     velocity_scaling: 0.1, acceleration_scaling: 0.1}' --feedback
 ```
@@ -39,7 +39,7 @@ ros2 action send_goal /arms/move dual_arm_interfaces/action/MoveArms \
 ros2 action send_goal /arms/move dual_arm_interfaces/action/MoveArms \
   '{goal_type: explicit, mode: right, target_type: pose,
     right_target: {header: {frame_id: mur}, pose: {
-      position: {x: 0.6, y: -0.35, z: 1.2},
+      position: {x: 0.6, y: -0.15, z: 1.2},
       orientation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0}}},
     velocity_scaling: 0.1, acceleration_scaling: 0.1}' --feedback
 ```
@@ -50,10 +50,10 @@ ros2 action send_goal /arms/move dual_arm_interfaces/action/MoveArms \
 ros2 action send_goal /arms/move dual_arm_interfaces/action/MoveArms \
   '{goal_type: explicit, mode: both, target_type: pose,
     left_target: {header: {frame_id: mur}, pose: {
-      position: {x: 0.6, y: 0.35, z: 1.2},
+      position: {x: 0.6, y: -0.15, z: 1.2},
       orientation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0}}},
     right_target: {header: {frame_id: mur}, pose: {
-      position: {x: 0.6, y: -0.35, z: 1.2},
+      position: {x: 0.6, y: -0.45, z: 1.2},
       orientation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0}}},
     velocity_scaling: 0.1, acceleration_scaling: 0.1}' --feedback
 ```
@@ -69,10 +69,10 @@ ros2 action send_goal /arms/move dual_arm_interfaces/action/MoveArms \
   '{goal_type: explicit, mode: sequential, sequential_order: right_first,
     target_type: pose,
     left_target: {header: {frame_id: mur}, pose: {
-      position: {x: 0.6, y: 0.35, z: 1.2},
+      position: {x: 0.6, y: 0.15, z: 1.2},
       orientation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0}}},
     right_target: {header: {frame_id: mur}, pose: {
-      position: {x: 0.6, y: -0.35, z: 1.2},
+      position: {x: 0.6, y: -0.15, z: 1.2},
       orientation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0}}},
     velocity_scaling: 0.1, acceleration_scaling: 0.1}' --feedback
 ```
