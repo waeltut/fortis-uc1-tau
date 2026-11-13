@@ -123,7 +123,7 @@ controller_server:
   ros__parameters:
     #use_sim_time: True     # Use for Rosbags
     use_sim_time: False     # Use for real-time
-    controller_frequency: 20.0
+    controller_frequency: 10.0  # MPPI model_dt is 0.1 s
     min_x_velocity_threshold: 0.001
     min_y_velocity_threshold: 0.0
     min_theta_velocity_threshold: 0.001
@@ -148,61 +148,96 @@ controller_server:
       plugin: "nav2_controller::SimpleGoalChecker"
       xy_goal_tolerance: 0.10
       yaw_goal_tolerance: 0.10
-    # DWB parameters
+    # ROS 2 Humble Nav2 MPPI controller.  The MiR is differential-drive.
+    # Runtime dynamic footprint: /local_costmap/footprint (geometry_msgs/Polygon).
+    # MPPI reads the local costmap's current footprint, not its published_footprint topic.
     FollowPath:
-      plugin: "dwb_core::DWBLocalPlanner"
-      debug_trajectory_details: True
+      plugin: "nav2_mppi_controller::MPPIController"
 
-      min_vel_x: -0.05
-      max_vel_x: 0.40
+      # 10 Hz controller <=> 0.1 s model step; 15 steps predict 1.5 seconds.
+      # Start at 1000 samples on the Jetson; raise to 2000 only after profiling.
+      time_steps: 15
+      model_dt: 0.1
+      batch_size: 1000
+      iteration_count: 1
+      vx_std: 0.2
+      vy_std: 0.2
+      wz_std: 0.4
 
-      min_vel_y: 0.0
-      max_vel_y: 0.0
+      # Keep these aligned with velocity_smoother below.
+      vx_max: 0.20
+      vx_min: -0.05
+      vy_max: 0.0
+      wz_max: 0.40
+      ax_max: 0.30
+      ax_min: -0.40
+      az_max: 0.60
 
-      min_speed_xy: 0.0
-      max_speed_xy: 0.40
-
-      min_speed_theta: 0.0
-      max_vel_theta: 0.40
-      # Add high threshold velocity for turtlebot 3 issue.
-      # https://github.com/ROBOTIS-GIT/turtlebot3_simulations/issues/75
-      acc_lim_x: 0.30
-      acc_lim_y: 0.0
-      acc_lim_theta: 0.60
-
-      decel_lim_x: -0.40
-      decel_lim_y: 0.0
-      decel_lim_theta: -0.80
-
-      vx_samples: 20
-      vy_samples: 1
-      vtheta_samples: 20
-
-      linear_granularity: 0.05
-      angular_granularity: 0.15
-
+      temperature: 0.3
+      gamma: 0.015
+      motion_model: "DiffDrive"
+      prune_distance: 1.7
       transform_tolerance: 0.2
-      xy_goal_tolerance: 0.1
+      visualize: false
+      reset_period: 1.0  # Humble only
+      TrajectoryVisualizer:
+        trajectory_step: 5
+        time_step: 3
 
-      trans_stopped_velocity: 0.02
-      short_circuit_trajectory_evaluation: True
-      stateful: True
-      critics: ["RotateToGoal", "Oscillation", "BaseObstacle", "GoalAlign", "PathAlign", "PathDist", "GoalDist"] #, "PreferForward"]
-      BaseObstacle.scale: 2.0
-      PathAlign.scale: 32.0
-      PathAlign.forward_point_distance: 0.1
-      GoalAlign.scale: 24.0
-      GoalAlign.forward_point_distance: 0.1
-      PathDist.scale: 32.0
-      GoalDist.scale: 24.0
-      RotateToGoal.scale: 32.0
-      RotateToGoal.slowing_factor: 5.0
-      RotateToGoal.lookahead_time: 1.0
-      PreferForward.scale: 10.0
-      PreferForward.penalty: 5.0
-      PreferForward.strafe_x: 0.05
-      PreferForward.strafe_theta: 0.1
-      PreferForward.theta_scale: 10.0
+      critics: ["ConstraintCritic", "CostCritic", "GoalCritic", "GoalAngleCritic", "PathAlignCritic", "PathFollowCritic", "PathAngleCritic", "PreferForwardCritic"]
+      ConstraintCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 4.0
+      GoalCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 5.0
+        threshold_to_consider: 1.4
+      GoalAngleCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 3.0
+        threshold_to_consider: 0.5
+      PreferForwardCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 5.0
+        threshold_to_consider: 0.5
+      CostCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 2.0
+        critical_cost: 300.0
+        consider_footprint: true  # Uses the current, dynamically updated local footprint.
+        collision_cost: 1000000.0
+        near_goal_distance: 1.0
+        inflation_layer_name: "inflation_layer"
+        # Intentionally no trajectory_point_step: unsupported by Humble CostCritic.
+      PathAlignCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 14.0
+        max_path_occupancy_ratio: 0.05
+        trajectory_point_step: 4
+        threshold_to_consider: 0.5
+        # Short 0.30 m max travel horizon: the lab robot's 20-point offset is too long.
+        offset_from_furthest: 6
+        use_path_orientations: false
+      PathFollowCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 5.0
+        offset_from_furthest: 5
+        threshold_to_consider: 1.4
+      PathAngleCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 2.0
+        offset_from_furthest: 4
+        threshold_to_consider: 0.5
+        max_angle_to_furthest: 1.0
+        forward_preference: true
 
 local_costmap:
   local_costmap:
@@ -216,6 +251,8 @@ local_costmap:
       width: 10
       height: 10
       resolution: 0.05
+      # FALLBACK footprint until mur_footprint publishes a runtime Polygon to
+      # /local_costmap/footprint. Do NOT publish to published_footprint (Nav2 output).
       footprint: "[[0.50, 0.30], [-0.50, 0.30], [-0.50, -0.30], [0.50, -0.30]]"
       plugins: [ "obstacle_layer", "inflation_layer"]
       obstacle_layer:
@@ -234,6 +271,8 @@ local_costmap:
           max_obstacle_height: 2.0
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
+        # Leave inflation unchanged for the first MPPI test; if the extended
+        # arms exceed 0.6 m from the base centre, full footprint checks may be costly.
         inflation_radius: 0.6
         cost_scaling_factor: 15.0
       always_send_full_costmap: True
@@ -375,7 +414,7 @@ velocity_smoother:
     use_sim_time: False     # Use for real-time
     #use_sim_time: True     # Use for Rosbags
 
-    max_velocity: [0.40, 0.0, 0.40]
+    max_velocity: [0.20, 0.0, 0.40]
     min_velocity: [-0.05, 0.0, -0.40]
 
     max_accel: [0.30, 0.0, 0.60]
