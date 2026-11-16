@@ -20,4 +20,7 @@
   <exec_depend>ament_index_python</exec_depend>
   <export><build_type>ament_python</build_type></export>
   <exec_depend>rcl_interfaces</exec_depend>
+  <exec_depend>rosidl_runtime_py</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+  <exec_depend>moveit_msgs</exec_depend>
 </package>

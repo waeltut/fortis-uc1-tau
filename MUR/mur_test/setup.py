@@ -8,6 +8,7 @@ setup(
     version='0.1.0',
     packages=find_packages(exclude=['test']),
     data_files=[
+        ('share/mur_test/config', ['config/benchmark_config.yaml']),
         ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
         (os.path.join('share', package_name, 'launch'), glob('launch/*.launch.py')),
@@ -20,5 +21,7 @@ setup(
     description='Manually confirmed MiR navigation and fresh post-navigation MoveIt arm motion test',
     license='Apache-2.0',
     entry_points={'console_scripts': [
+        'mur_kpi_stress = mur_test.kpi_stress:main',
+        'mur_kpi_benchmark = mur_test.kpi_benchmark:main',
         'pose_height_relay = mur_test.pose_height_relay:main','mur_test = mur_test.test_node:main']},
 )

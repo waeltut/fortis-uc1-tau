@@ -1,0 +1,57 @@
+# Verified against mur_base_selector_interfaces/srv/SelectBase, 16 November 2026.
+service_name: /base_selection/select
+expected_service_type: mur_base_selector_interfaces/srv/SelectBase
+frame: map
+seed: 2026
+shuffle: true
+service_timeout_s: 45
+nav_timeout_s: 20
+diagnostics_topic: /base_selection/candidate_diagnostics
+
+response_success_path: success
+response_pose_path: navigation_goal
+response_arm_path: arm
+response_message_path: message
+
+# The selector supports a legacy single-target request and a multi-target request.
+# __TARGET__ expands to one PoseStamped; __POINTS__ to PoseStamped[].
+# __ARMS__ expands to a string[] matching the corresponding poses.
+single_request_template:
+  target: __TARGET__
+  arm: ${arm}
+multi_request_template:
+  targets: __POINTS__
+  arms: __ARMS__
+
+point_template:
+  header:
+    frame_id: ${frame}
+  pose:
+    position: {x: "${x}", y: "${y}", z: "${z}"}
+    orientation: {x: "${qx}", y: "${qy}", z: "${qz}", w: "${qw}"}
+
+arm_values:
+  any: any
+  left: left
+  right: right
+  both: both
+
+sampling:
+  # null: obtain live map <- base_link XY via TF when 'run' executes.
+  # dry-run with null centre: use --center 0 0 to preview coordinates.
+  center_xy: null
+  center_tf_frame: base_link
+  min_radius_m: 0.6
+  max_radius_m: 2.0
+  height_m: 0.95
+  orientation_mode: fixed
+  # Representative example, not guaranteed to be feasible for every test target.
+  tcp_quaternion: [0.0, 0.0, -0.4946, 0.8691]
+
+scenarios:
+  - {name: any_arm, count: 5, points: 1, arm: any}
+  - {name: left_only, count: 5, points: 1, arm: left}
+  - {name: right_only, count: 5, points: 1, arm: right}
+  - {name: multiple_points, count: 5, points: 3, arm: any, point_spread_m: 0.25}
+  - {name: multiple_points_mixed_arms, count: 5, points: 3, point_arms: [left, right, any], point_spread_m: 0.25}
+  - {name: intentionally_too_high, count: 3, points: 1, arm: any, height_m: 5.0, expected_feasible: false}

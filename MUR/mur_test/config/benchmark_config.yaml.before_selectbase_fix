@@ -1,0 +1,59 @@
+# ADAPT request_template, point_template, response paths to your real custom .srv.
+# Discover the service interface using: python3 mur_kpi_benchmark.py inspect --service /find_base_candidates
+service_name: /find_base_candidates  # replace if your service was renamed
+frame: map
+seed: 2026
+shuffle: true
+service_timeout_s: 45
+nav_timeout_s: 20
+diagnostics_topic: /base_selection/candidate_diagnostics
+
+# Explicit response fields are strongly recommended. Update after inspecting the interface.
+response_success_path: success       # replace if response uses e.g. result.success
+response_pose_path: selected_pose    # replace if response uses e.g. result.base_pose
+response_arm_path: selected_arm      # replace if different
+response_message_path: message      # optional
+
+# The following two YAML blocks are ILLUSTRATIVE, NOT verified against your package.
+# request_template is the ENTIRE service request.
+# __POINTS__ expands to a list of generated point_template entries.
+request_template:
+  targets: __POINTS__
+  time_budget: 20.0
+  max_verified_per_arm: 150
+
+# If your service accepts PoseStamped[] directly, use:
+# point_template: {header: {frame_id: "${frame}"}, pose: {position: ... , orientation: ...}}
+# If targets are custom objects with an arm constraint, edit this template to match.
+point_template:
+  pose:
+    header:
+      frame_id: ${frame}
+    pose:
+      position: {x: "${x}", y: "${y}", z: "${z}"}
+      orientation: {x: "${qx}", y: "${qy}", z: "${qz}", w: "${qw}"}
+  arm: ${arm}
+
+arm_values:
+  any: any
+  left: left
+  right: right
+  both: both
+
+sampling:
+  # A specified centre lets dry-run work without ROS. Set to null to get map->base_link TF.
+  center_xy: [0.0, 0.0]
+  center_tf_frame: base_link
+  min_radius_m: 0.6
+  max_radius_m: 2.0
+  height_m: 0.95
+  orientation_mode: fixed
+  # Example TCP orientation; choose one representative of the actual work task.
+  tcp_quaternion: [0.0, 0.0, -0.4946, 0.8691]
+
+scenarios:
+  - {name: any_arm, count: 5, points: 1, arm: any, expected_feasible: true}
+  - {name: left_only, count: 5, points: 1, arm: left, expected_feasible: true}
+  - {name: right_only, count: 5, points: 1, arm: right, expected_feasible: true}
+  - {name: multiple_points, count: 5, points: 3, arm: any, point_spread_m: 0.25, expected_feasible: true}
+  - {name: intentionally_too_high, count: 3, points: 1, arm: any, height_m: 5.0, expected_feasible: false}
