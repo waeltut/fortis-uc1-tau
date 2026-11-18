@@ -10,13 +10,13 @@ def generate_launch_description():
             name='motivation_work',
             output='screen',
         ),
-        Node(
-            package='reasoning_controller',
-            namespace='reasoning',
-            executable='motivation_replan',
-            name='motivation_replan',
-            output='screen',
-        ),
+        #Node(
+        #    package='reasoning_controller',
+        #    namespace='reasoning',
+        #    executable='motivation_replan',
+        #    name='motivation_replan',
+        #    output='screen',
+        #),
         Node(
             package='reasoning_controller',
             namespace='reasoning',
@@ -24,13 +24,13 @@ def generate_launch_description():
             name='motivation_inform',
             output='screen',
         ),
-        Node(
-            package='reasoning_controller',
-            namespace='reasoning',
-            executable='motivation_capability',
-            name='motivation_capability',
-            output='screen',
-        ),
+        #Node(
+        #    package='reasoning_controller',
+        #    namespace='reasoning',
+        #    executable='motivation_capability',
+        #    name='motivation_capability',
+        #    output='screen',
+        #),
         Node(
             package='reasoning_controller',
             namespace='reasoning',

@@ -25,8 +25,8 @@ class Motivation(Node):
 
         # Variables
         self.human_visible = False
-        self.timeInteraction = 10
-        self.enabled = True
+        self.timeInteraction = self.get_clock().now() - Duration(seconds=3600)
+        self.enabled = False
         
         ## Fuzzy ##
         # Input
@@ -67,7 +67,7 @@ class Motivation(Node):
         self.human_visible = msg.visible
     
     def hearing_callback(self, msg):
-        self.timeInteraction = self.get_clock().now().nanoseconds / 1e9 - msg.data
+        self.timeInteraction = self.get_clock().now()
     
     def capability_callback(self, msg):
         if msg.data > 50:
@@ -78,8 +78,9 @@ class Motivation(Node):
     
     def fuzzy_inference(self):
         # Compute
+        timeSinceInteraction = (self.get_clock().now() - self.timeInteraction).nanoseconds / 1e9
         self.sim.input["human_visible"] = self.human_visible
-        self.sim.input["time_since_last_interaction"] = self.timeInteraction
+        self.sim.input["time_since_last_interaction"] = max(0.0, min(timeSinceInteraction, 20.0))
         self.sim.compute()
         self.msg.data = self.sim.output["respond_motivation"] if self.enabled else 0.0
         self.motivation_pub.publish(self.msg)
