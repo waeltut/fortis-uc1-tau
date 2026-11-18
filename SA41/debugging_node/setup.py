@@ -1,6 +1,6 @@
 from setuptools import find_packages, setup
 
-package_name = 'DebugingNode'
+package_name = 'debugging_node'
 
 setup(
     name=package_name,
@@ -23,6 +23,10 @@ setup(
         ],
     },
     entry_points={
-        'console_scripts': ["deb_node = DebugingNode.deb_node:main"],
+        'console_scripts': [
+            "deb_node = debugging_node.deb_node:main",
+            "amcl_monitor = debugging_node.amcl_monitor:main",
+            "audio_recorder = debugging_node.audio_recorder:main"
+            ],
     },
 )
