@@ -1,4 +1,5 @@
 import time
+import os
 import rclpy
 from rclpy import qos
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
@@ -51,6 +52,12 @@ def tf_conv(msg):
         tf_msg.transforms.append(ts)
     
     return tf_msg
+
+
+def string_conv(msg):
+    value = String()
+    value.data = msg["data"]
+    return value
 
 
 def laser_conv(msg):
@@ -163,6 +170,7 @@ TYPES = {
     "/MC/battery_percentage": [Float64, std_msg_f64],
     "/robot_state": [MirState, mir_state],
     "/scan": [LaserScan, laser_conv],
+    "/light_cmd": [String, string_conv],
 }    # The qos-profiles can/should be changed
 
 
@@ -291,6 +299,11 @@ class Subscriber(object):
 class MiR_Bridge(Node):
     def __init__(self, rosbridge_host='192.168.1.14', rosbridge_port=9090):
         super().__init__('mir_bridge')
+        # Defaults remain identical to the MUR setup; overridable for the other MiR.
+        rosbridge_host = str(self.declare_parameter(
+            'rosbridge_host', os.environ.get('MIR_ROSBRIDGE_HOST', rosbridge_host)).value)
+        rosbridge_port = int(self.declare_parameter(
+            'rosbridge_port', int(os.environ.get('MIR_ROSBRIDGE_PORT', rosbridge_port))).value)
         
         try:
             # Variables
