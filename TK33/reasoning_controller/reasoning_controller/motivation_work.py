@@ -16,8 +16,8 @@ class Motivation(Node):
     def __init__(self):
         # Ros
         super().__init__("motivation_work")
-        self.motivation_pub = self.create_publisher(Float32, "/reasoning/motivation_work", 1)
-        self.motivation_pub = self.create_publisher(Float64, "/reasoning/dist_goal", 1)
+        self.motivation_pub = self.create_publisher(Float32, "/steven/reasoning/motivation_work", 1)
+        self.dist_pub = self.create_publisher(Float64, "/reasoning/dist_goal", 1)
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
         self.create_subscription(Bool, "/steven/movement/work_complete", self.work_callback, 1)
@@ -82,6 +82,7 @@ class Motivation(Node):
         self.create_timer(0.10, self.fuzzy_inference)
 
         # Plotting
+        """
         upsampled_x = np.linspace(min_time_since_last_worked, max_time_since_last_worked, max_time_since_last_worked-min_time_since_last_worked+1)        # time since last 
         upsampled_y = np.linspace(min_distance_to_goal, max_distance_to_goal, max_distance_to_goal-min_distance_to_goal+1)            # distance to goal
         x, y = np.meshgrid(upsampled_x, upsampled_y)
@@ -106,6 +107,7 @@ class Motivation(Node):
 
         ax.view_init(30, 200)
         plt.show()    
+        """
         
 
     def work_callback(self, msg):
@@ -121,6 +123,8 @@ class Motivation(Node):
 
 
     def fuzzy_inference(self):
+        self.motivation_pub.publish(self.msg)
+        """
         try:
             # get transform from map -> base_link
             (trans, rot) = self.tf_buffer.lookup_transform(
@@ -142,6 +146,7 @@ class Motivation(Node):
             self.motivation_pub.publish(self.msg)
         except:
             pass
+        """
 
 def main(args=None):
     rclpy.init(args=args)
