@@ -25,6 +25,7 @@ class PiperTTSNode(Node):
 
     def callback(self, msg):
         text = msg.data
+        #print(text)
         self.get_logger().info(f"Speaking: {text}")
 
         cmd = [

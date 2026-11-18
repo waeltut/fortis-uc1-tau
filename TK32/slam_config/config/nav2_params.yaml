@@ -35,11 +35,11 @@ amcl:
     resample_interval: 1
     robot_model_type: "nav2_amcl::DifferentialMotionModel"
     save_pose_rate: 0.5
-    sigma_hit: 0.2
+    sigma_hit: 0.20    # 0.2
     tf_broadcast: true
     transform_tolerance: 0.2
-    update_min_a: 0.2
-    update_min_d: 0.25
+    update_min_a: 0.05    # 0.2
+    update_min_d: 0.05    # 0.2
     z_hit: 0.5
     z_max: 0.05
     z_rand: 0.5
@@ -48,6 +48,7 @@ amcl:
 
 bt_navigator:
   ros__parameters:
+    default_nav_to_pose_bt_xml: "/home/fortis_dev/ros2_ws/src/TK32/slam_config/behaviors/navigate_to_pose_w_replanning_and_custom_recovery.xml"
     #use_sim_time: True     # Use for Rosbags
     use_sim_time: False     # Use for real-time
     global_frame: map
@@ -108,6 +109,7 @@ bt_navigator:
       - nav2_assisted_teleop_cancel_bt_node
       - nav2_drive_on_heading_cancel_bt_node
       - nav2_is_battery_charging_condition_bt_node
+      - custom_bt
 
 bt_navigator_navigate_through_poses_rclcpp_node:
   ros__parameters:
@@ -123,7 +125,7 @@ controller_server:
   ros__parameters:
     #use_sim_time: True     # Use for Rosbags
     use_sim_time: False     # Use for real-time
-    controller_frequency: 20.0
+    controller_frequency: 10.0
     min_x_velocity_threshold: 0.001
     min_y_velocity_threshold: 0.0
     min_theta_velocity_threshold: 0.001
@@ -148,8 +150,84 @@ controller_server:
       plugin: "nav2_controller::SimpleGoalChecker"
       xy_goal_tolerance: 0.40
       yaw_goal_tolerance: 0.1
-    # DWB parameters
+
     FollowPath:
+      plugin: "nav2_mppi_controller::MPPIController"
+      time_steps: 15 # 56
+      model_dt: 0.1
+      batch_size: 2000
+      vx_std: 0.2
+      vy_std: 0.2
+      wz_std: 0.8
+      vx_max: 0.30
+      vx_min: -0.30
+      vy_max: 0.0
+      wz_max: 1.0
+      iteration_count: 1
+      temperature: 0.3
+      gamma: 0.015
+      motion_model: "DiffDrive"
+      visualize: false
+      TrajectoryVisualizer:
+        trajectory_step: 5
+        time_step: 3
+      DiffDrive:
+        plugin: "mppi::DiffDriveMotionModel"
+      critics: ["ConstraintCritic", "CostCritic", "GoalCritic", "GoalAngleCritic", "PathAlignCritic", "PathFollowCritic", "PathAngleCritic", "PreferForwardCritic"]
+      ConstraintCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 4.0
+      GoalCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 5.0
+        threshold_to_consider: 1.4
+      GoalAngleCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 3.0
+        threshold_to_consider: 0.5
+      PreferForwardCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 5.0
+        threshold_to_consider: 0.5
+      CostCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 2.00  # 3.81
+        critical_cost: 300.0
+        consider_footprint: true
+        collision_cost: 1000000.0
+        near_goal_distance: 1.0
+        trajectory_point_step: 2
+      PathAlignCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 14.0
+        max_path_occupancy_ratio: 0.05
+        trajectory_point_step: 4
+        threshold_to_consider: 0.5
+        offset_from_furthest: 20
+        use_path_orientations: false
+      PathFollowCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 5.0
+        offset_from_furthest: 5
+        threshold_to_consider: 1.4
+      PathAngleCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 2.0
+        offset_from_furthest: 4
+        threshold_to_consider: 0.5
+        max_angle_to_furthest: 1.0
+        forward_preference: true
+
+    # DWB parameters
+    FollowPath1:
       plugin: "dwb_core::DWBLocalPlanner"
       debug_trajectory_details: True
 
@@ -166,9 +244,9 @@ controller_server:
       max_vel_theta: 1.0
       # Add high threshold velocity for turtlebot 3 issue.
       # https://github.com/ROBOTIS-GIT/turtlebot3_simulations/issues/75
-      acc_lim_x: 0.4
+      acc_lim_x: 0.2
       acc_lim_y: 0.0
-      acc_lim_theta: 1.0
+      acc_lim_theta: 0.5
 
       decel_lim_x: -2.5
       decel_lim_y: 0.0
@@ -216,8 +294,8 @@ local_costmap:
       width: 10
       height: 10
       resolution: 0.05
-      footprint: "[[0.50, 0.30], [-0.50, 0.30], [-0.50, -0.30], [0.50, -0.30]]"
-      plugins: [ "obstacle_layer", "inflation_layer"]
+      footprint: "[[0.445, 0.290], [-0.445, 0.290], [-0.445, -0.290], [0.445, -0.290]]"  # "[[0.50, 0.30], [-0.50, 0.30], [-0.50, -0.30], [0.50, -0.30]]"    # "[[0.445, 0.290], [-0.445, 0.290], [-0.445, -0.290], [0.445, -0.290]]"
+      plugins: ["obstacle_layer", "inflation_layer"]    # Remember to re-add obstacle_layer    "denoise_layer"    "voxel_layer"
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: True
@@ -232,10 +310,38 @@ local_costmap:
           raytrace_max_range: 6.0
           raytrace_min_range: 0.0
           max_obstacle_height: 2.0
+      
+      voxel_layer:
+        plugin: "nav2_costmap_2d::VoxelLayer"
+        enabled: True
+        footprint_clearing_enabled: True
+        max_obstacle_height: 0.80
+        z_voxels: 16
+        origin_z: 0.0
+        z_resolution: 0.2
+        #publish_voxel_map: True
+        #unknown_threshold: 15
+        #mark_threshold: 0
+        # sensor_frame: camera_depth_optical_frame
+        observation_sources: realsense1
+        realsense1:
+          topic: /camera/camera/depth/color/points
+          max_obstacle_height: 2.0
+          obstacle_max_range: 1.25
+          obstacle_min_range: 0.05
+          raytrace_min_range: 0.05
+          data_type: "PointCloud2"
+          marking: True
+          clearing: True
+      
+      denoise_layer:
+        plugin: "nav2_costmap_2d::DenoiseLayer"
+        enabled: True
+
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        inflation_radius: 0.35
-        cost_scaling_factor: 10.0
+        inflation_radius: 1.75
+        cost_scaling_factor: 7.00 # 2.58
       always_send_full_costmap: True
       transform_tolerance: 0.2
 
@@ -249,7 +355,7 @@ global_costmap:
       use_sim_time: False
       rolling_window: false
       resolution: 0.05
-      footprint: "[[0.50, 0.30], [-0.50, 0.30], [-0.50, -0.30], [0.50, -0.30]]"
+      footprint: "[[0.445, 0.290], [-0.445, 0.290], [-0.445, -0.290], [0.445, -0.290]]"  # "[[0.50, 0.30], [-0.50, 0.30], [-0.50, -0.30], [0.50, -0.30]]"
       track_unknown_space: true
       plugins: ["static_layer", "obstacle_layer", "inflation_layer", "audio_layer"]
       #plugins: ["static_layer", "inflation_layer", "audio_layer"]
@@ -275,8 +381,8 @@ global_costmap:
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         enabled: true
-        inflation_radius: 1.0
-        cost_scaling_factor: 5.0
+        inflation_radius: 1.75
+        cost_scaling_factor: 2.58
       audio_layer:
         plugin: "adaptive_layers::AudioLayer"
         enabled: true
@@ -290,7 +396,7 @@ map_server:
     use_sim_time: False     # Use for real-time
     # Overridden in launch by the "map" launch configuration or provided default value.
     # To use in yaml, remove the default "map" value in the tb3_simulation_launch.py file & provide full path to map below.
-    yaml_filename: "/home/fortis_dev/ros2_ws/src/TK32/slam_config/maps/map_rt_clean.yaml"
+    yaml_filename: "/home/fortis_dev/ros2_ws/src/TK32/slam_config/maps/map_rt_clean_2.yaml"
 
 map_saver:
   ros__parameters:
@@ -307,7 +413,43 @@ planner_server:
     #use_sim_time: True     # Use for Rosbags
     use_sim_time: False     # Use for real-time
     planner_plugins: ["GridBased"]
+
     GridBased:
+      plugin: "nav2_smac_planner/SmacPlannerLattice"
+      allow_unknown: false                # Allow traveling in unknown space
+      tolerance: 0.25                     # dist-to-goal heuristic cost (distance) for valid tolerance endpoints if exact goal cannot be found.
+      max_iterations: 1000000             # Maximum total iterations to search for before failing (in case unreachable), set to -1 to disable
+      max_on_approach_iterations: 1000    # Maximum number of iterations after within tolerances to continue to try to find exact solution
+      # terminal_checking_interval
+      max_planning_time: 5.0              # Max time in s for planner to plan, smooth
+      analytic_expansion_ratio: 3.5       # The ratio to attempt analytic expansions during search for final approach.
+      analytic_expansion_max_length: 1.5  # For Hybrid/Lattice nodes The maximum length of the analytic expansion to be considered valid to prevent unsafe shortcutting
+      analytic_expansion_max_cost: 200.0  # The maximum single cost for any part of an analytic expansion to contain and be valid, except when necessary on approach to goal
+      analytic_expansion_max_cost_override: false  #  Whether or not to override the maximum cost setting if within critical distance to goal (ie probably required)
+      downsample_obstacle_heuristic: true   # Downsample the obstacle map dynamic programming distance expansion heuristic to speed up search at the cost of some path quality
+      use_quadratic_cost_penalty: false   # Use quadratic cost penalty for traversal and heuristic cost computations rather than linear
+      reverse_penalty: 2.0                # Penalty to apply if motion is reversing, must be => 1
+      change_penalty: 0.05                # Penalty to apply if motion is changing directions (L to R), must be >= 0
+      non_straight_penalty: 1.05          # Penalty to apply if motion is non-straight, must be => 1
+      cost_penalty: 2.0                   # Penalty to apply to higher cost areas when adding into the obstacle map dynamic programming distance expansion heuristic. This drives the robot more towards the center of passages. A value between 1.3 - 3.5 is reasonable.
+      rotation_penalty: 5.0               # Penalty to apply to in-place rotations, if minimum control set contains them
+      retrospective_penalty: 0.015
+      lattice_filepath: "/home/fortis_dev/ros2_ws/src/TK32/slam_config/config/mir_lattice.json"                # The filepath to the state lattice graph
+      lookup_table_size: 20.0             # Size of the dubin/reeds-sheep distance window to cache, in meters.
+      cache_obstacle_heuristic: false     # Cache the obstacle map dynamic programming distance expansion heuristic between subsequent replannings of the same goal location. Dramatically speeds up replanning performance (40x) if costmap is largely static.
+      allow_reverse_expansion: true       # If true, allows the robot to use the primitives to expand in the mirrored opposite direction of the current robot's orientation (to reverse).
+      coarse_search_resolution: 1         # Number of bins to skip when doing a coarse search for the path. Only used for all_direction goal heading mode.
+      goal_heading_mode: "DEFAULT"        # DEFAULT, BIDIRECTIONAL, ALL_DIRECTION
+      smooth_path: True                   # If true, does a simple and quick smoothing post-processing to the path
+      smoother:
+        max_iterations: 1000
+        w_smooth: 0.3
+        w_data: 0.2
+        tolerance: 1.0e-10
+        do_refinement: true
+        refinement_num: 2
+
+    GridBased1:
       plugin: "nav2_navfn_planner/NavfnPlanner"
       tolerance: 0.5
       use_astar: false
@@ -346,9 +488,9 @@ behavior_server:
     #use_sim_time: True     # Use for Rosbags
     use_sim_time: False     # Use for real-time
     simulate_ahead_time: 2.0
-    max_rotational_vel: 1.0
-    min_rotational_vel: 0.4
-    rotational_acc_lim: 3.2
+    max_rotational_vel: 1.0  # 1.0
+    min_rotational_vel: 0.05  # 0.4
+    rotational_acc_lim: 1.0  # 3.2
 
 robot_state_publisher:
   ros__parameters:

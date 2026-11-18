@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 import rclpy
+from rclpy.qos import QoSProfile, QoSDurabilityPolicy, QoSHistoryPolicy, QoSReliabilityPolicy
 from rclpy.node import Node
 from std_msgs.msg import UInt8MultiArray, Header
 from nav_msgs.msg import OccupancyGrid, Path
 from geometry_msgs.msg import Pose, Point
+from fortis_interfaces.msg import MapCost, MapUpdateCost
 import numpy as np
 import math
 
@@ -15,26 +17,66 @@ class AudioCostManager(Node):
         self.width = None
         self.height = None
         self.resolution = None
-        self.publish_rate = 0.1 # Hz
+        self.publish_rate = 5 # Hz    (was 0.1)
         self.size = None
         self.origin = None
         self.global_costmap = None
         self.path = None
+        self.map_update = True
+        self.min_cost = 100
+        self.max_cost = 250
+
+
+        # More placeholders
+        self.gaussians = [
+            {
+                "mean": (800, 500),
+                "covariance": [[5, 0], [0, 5]],
+                "weight": 0
+            },
+            {
+                "mean": (480, 300),
+                "covariance": [[10, 0], [0, 10]],
+                "weight": 1.2
+            },
+            {
+                "mean": (350, 500),
+                "covariance": [[2, 0], [0, 2]],
+                "weight": 1.2
+            },
+            {
+                "mean": (800, 150),
+                "covariance": [[10, 0], [0, 10]],
+                "weight": 1.2
+            }
+        ]
+
+
+        # Quality of Service
+        qos_init = QoSProfile(    # The initial map needs to stay available for later robots
+            history=QoSHistoryPolicy.KEEP_LAST,
+            depth=1,
+            reliability=QoSReliabilityPolicy.RELIABLE,
+            durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
+        )
 
 
         # Publishers
-        self.audio_cost_publisher_ = self.create_publisher(UInt8MultiArray, '/global_costmap/global_costmap/audio_costs', 1)
+        self.init_audio_cost_publisher_ = self.create_publisher(MapCost, '/global_costmap/global_costmap/init_audio_costs', qos_init)
+        self.audio_cost_update_publisher_ = self.create_publisher(MapCost, 'global_costmap/global_costmap/audio_costs', 1)
         self.audio_grid_publisher_ = self.create_publisher(OccupancyGrid, '/costmaps_manager/audio_costs', 1)
 
         # Subscribers
         self.map_subscription = self.create_subscription(OccupancyGrid, '/global_costmap/costmap', self.costmap_callback,1)
         self.point_subscription = self.create_subscription(Point, '/clicked_point', self.point_callback,1)
         self.plan_subscription = self.create_subscription(Path, '/plan', self.plan_callback,1)
+        self.map_update_subscription = self.create_subscription(MapUpdateCost, '/placeholder_audio_update', self.update_callback, 1)
 
         # Timers
-        self.timer = self.create_timer(1.0 / self.publish_rate, self.costs_publisher)
+        self.timer = self.create_timer(1.0 / self.publish_rate, self.costmap_publisher)
         
         self.get_logger().info('Audio Costmap Manager is initilized')
+
 
     def costmap_callback(self, msg: OccupancyGrid):
         self.global_costmap = msg
@@ -64,70 +106,142 @@ class AudioCostManager(Node):
         self.path = msg
         if self.global_costmap:
             cost = compute_path_cost(self.path, self.global_costmap, self.resolution, self.origin)
-        self.get_logger().info(f'A path hase been recieved with cost: {cost}')
+            self.get_logger().info(f'A path hase been recieved with cost: {cost}')
 
-    def costs_publisher(self):
-        if not (self.width and self.height):
+    def update_callback(self, msg):
+        ### PLACEHOLDER STARTS HERE ###
+        data = msg.data
+        mode = int(data[0])
+        if mode == 0:
+            try:
+                gauss = self.gaussians.pop(int(data[1]))
+            except IndexError:
+                self.get_logger().info("Index out of range")
+                return
+
+            # Have to remove the cost
+            bounding_box, costs = gaussian_costmap(
+                mean=gauss["mean"],
+                covariance=gauss["covariance"],
+                width=self.width,
+                height=self.height,
+                max_cost=self.max_cost,
+                min_cost=self.min_cost
+            )
+            costs = np.array(costs)
+            costs[costs!=0] = 255
+            costs = costs.tolist()
+        elif mode == 1:
+            gauss = {
+                "mean": (int(msg.i), int(msg.j)),
+                "covariance": [[data[1], 0], [0, data[2]]],
+                "weight": data[3],
+            }
+            self.gaussians.append(gauss)
+
+            # Then count the gaussian costmap for one gaussian
+            bounding_box, costs = gaussian_costmap(
+                mean=gauss["mean"],
+                covariance=gauss["covariance"],
+                width=self.width,
+                height=self.height,
+                max_cost=self.max_cost,
+                min_cost=self.min_cost
+            )
+
+        # Rossified programming
+        msg_cost = MapCost()
+        msg_cost.header = Header()
+        msg_cost.header.stamp = self.get_clock().now().to_msg()
+        msg_cost.data = costs
+        msg_cost.i = float(bounding_box[0])
+        msg_cost.j = float(bounding_box[1])
+        msg_cost.width = float(bounding_box[2])
+        msg_cost.height = float(bounding_box[3])
+        self.audio_cost_update_publisher_.publish(msg_cost)
+        self.get_logger().info("Local update calculated")
+        ### PLACEHOLDER ENDS HERE ###
+
+        self.map_update = True
+
+    def costmap_publisher(self):
+        if not self.map_update or not (self.width and self.height):
             return
+        self.map_update = False
         
-        msg_cost = UInt8MultiArray()
+        msg_cost = MapCost()
         #Nav2 possible cost values
-        #0      :        Completely freeFully traversable
+        #0      :        Completely free. Fully traversible
         #1–252  :        Increasing traversal cost
         #253    :        Inside robot’s inscribed radius (Practically forbidden)
         #254    :        Collision guaranteed
         #255    :        Unknown
 
-        gaussians = [
+        gaussians_1 = [
             {
                 "mean": (800, 500),
-                "covariance": [[100, 0], [0, 100]],
+                "covariance": [[5, 0], [0, 5]],
                 "weight": 0.0
             },
             {
                 "mean": (480, 300),
-                "covariance": [[30, 0], [0, 30]],
-                "weight": 1.2
+                "covariance": [[10, 0], [0, 10]],
+                "weight": 0.0
+            },
+            {
+                "mean": (350, 500),
+                "covariance": [[2, 0], [0, 2]],
+                "weight": 0.0
+            },
+            {
+                "mean": (800, 150),
+                "covariance": [[10, 0], [0, 10]],
+                "weight": 0.0
             }
         ]
 
         costs = multi_gaussian_costmap(
-            gaussians=gaussians,
+            gaussians=self.gaussians,
             width=self.width,
             height=self.height,
-            max_cost=250,
-            min_cost=100
+            max_cost=self.max_cost,
+            min_cost=self.min_cost
         )
 
+        msg_cost.header = Header()
+        msg_cost.header.stamp = self.get_clock().now().to_msg()
         msg_cost.data = costs
-        self.audio_cost_publisher_.publish(msg_cost)
+        self.init_audio_cost_publisher_.publish(msg_cost)
+
+        self.get_logger().info("Global update calculated")
         
-        msg_grid = OccupancyGrid()
+        #msg_grid = OccupancyGrid()
 
         # Header
-        msg_grid.header = Header()
-        msg_grid.header.frame_id = "map"
+        #msg_grid.header = Header()
+        #msg_grid.header.frame_id = "map"
 
         # Map metadata
-        msg_grid.info.width = self.width
-        msg_grid.info.height = self.height
-        msg_grid.info.resolution = self.resolution
+        #msg_grid.info.width = self.width
+        #msg_grid.info.height = self.height
+        #msg_grid.info.resolution = self.resolution
 
-        msg_grid.info.origin= self.origin
-        msg_grid.info.origin.orientation.w = self.origin.orientation.w  # no rotation
+        #msg_grid.info.origin= self.origin
+        #msg_grid.info.origin.orientation.w = self.origin.orientation.w  # no rotation
 
         
-        data = []
+        #data = []
 
-        for c in costs:
-            if c == 255:
-                data.append(-1)  # unknown
-            else:
-                occ = int((c / 252.0) * 100.0)
-                data.append(max(0, min(100, occ)))
+        #for c in costs:
+        #    if c == 255:
+        #        data.append(-1)  # unknown
+        #    else:
+        #        occ = int((c / 252.0) * 100.0)
+        #        data.append(max(0, min(100, occ)))
 
-        msg_grid.data = data
-        self.audio_grid_publisher_.publish(msg_grid)
+        #msg_grid.data = data
+        #self.audio_grid_publisher_.publish(msg_grid)
+
 
 def gaussian_costmap(mean, covariance, width, height, max_cost=252, min_cost=0):
     """
@@ -177,20 +291,30 @@ def gaussian_costmap(mean, covariance, width, height, max_cost=252, min_cost=0):
     if max_val > 0.0:
         values /= max_val
 
+    # Bounding box
+    rows, cols = np.where(values != 0)
+    box = [cols.min(), rows.min(), cols.max()-cols.min(), rows.max()-rows.min()]
+    values = values[rows.min():rows.max(), cols.min():cols.max()]
+
+    # God I love matlab
+    costs = values.flatten()
+    costs[costs>0] = min_cost + costs[costs>0] * (max_cost - min_cost)
+    costs = costs.astype(np.uint8)
+
     # Scale to [min_cost, max_cost]
-    for j in range(height):
-        for i in range(width):
-            index = i + j * width
-            v = values[j, i]
+    #for j in range(height):
+    #    for i in range(width):
+    #        index = i + j * width
+    #        v = values[j, i]
 
-            if v <= 0.0:
-                costs[index] = 0
-            else:
-                costs[index] = int(
-                    min_cost + v * (max_cost - min_cost)
-                )
+    #        if v <= 0.0:
+    #            costs[index] = 0
+    #        else:
+    #            costs[index] = int(
+    #                min_cost + v * (max_cost - min_cost)
+    #            )
 
-    return costs.tolist()
+    return box, costs.tolist()
 
 def multi_gaussian_costmap(gaussians, width, height, max_cost=252, min_cost=0):
     """

@@ -52,6 +52,10 @@ def tf_conv(msg):
     
     return tf_msg
 
+def string_conv(msg):
+    string = String()
+    string.data = msg["data"]
+    return string
 
 def laser_conv(msg):
     scan = LaserScan()
@@ -163,6 +167,7 @@ TYPES = {
     "/MC/battery_percentage": [Float64, std_msg_f64],
     "/robot_state": [MirState, mir_state],
     "/scan": [LaserScan, laser_conv],
+    "/light_cmd": [String, string_conv],
 }    # The qos-profiles can/should be changed
 
 

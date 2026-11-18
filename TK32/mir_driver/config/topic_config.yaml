@@ -15,3 +15,5 @@ topics:
       pub/sub: "sub"
     - topic: "/robot_state"
       pub/sub: "sub"
+    - topic: "/light_cmd"
+      pub/sub: "sub"
