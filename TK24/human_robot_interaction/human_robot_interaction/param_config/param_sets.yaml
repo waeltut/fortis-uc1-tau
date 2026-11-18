@@ -1,0 +1,45 @@
+audio_transcription_node:
+  ros__parameters:
+    model_filename: "base.en.pt"
+    sample_rate: 48000
+    whisper_rate: 16000
+    buffer_seconds: 2.0
+    noise_reduction_factor: 1.3
+    channels: 1
+    sample_width: 2
+
+audio_descriptor_processing_node:
+  ros__parameters:
+    sample_rate: 48000
+    whisper_rate: 16000
+    buffer_seconds: 2.0
+    noise_reduction_factor: 2
+    channels: 1
+    sample_width: 2
+    base_S_noise: -8.0
+    k_noise: 0.2
+    base_S_volume: 55.0
+    k_volume: 0.5
+
+visual_descriptor_processing_node:
+  ros__parameters:
+    base_S_light: 80.0
+    k_light: 1.0
+    base_S_contrast: 10.0
+    k_contrast: 2.0
+    base_S_speed: 0.4
+    k_speed: 0.5
+
+fusion_node:
+  ros__parameters:
+    base_S_noise: -8.0
+    k_noise: 0.2
+    base_S_volume: 55.0
+    k_volume: 0.5
+
+    base_S_light: 80.0
+    k_light: 1.0
+    base_S_contrast: 10.0
+    k_contrast: 2.0
+    base_S_speed: 0.4
+    k_speed: 0.5

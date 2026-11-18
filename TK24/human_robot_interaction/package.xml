@@ -1,0 +1,41 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>human_robot_interaction</name>
+  <version>0.0.1</version>
+  <description>mm percept</description>
+  <maintainer email="wael.mohammed@tuni.fi">fortis_dev</maintainer>
+  <license>TODO: License declaration</license>
+
+  <!-- Core ROS 2 Dependencies -->
+  <depend>rclpy</depend>
+  <depend>std_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>diagnostic_msgs</depend>
+
+  <!-- Vision Dependencies -->
+  <depend>cv_bridge</depend>
+  <depend>vision_opencv</depend>
+
+  <!-- Custom Interface Dependency -->
+  <depend>fortis_interfaces</depend>
+
+  <!-- External Python/Pip Dependencies -->
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-mediapipe-pip</exec_depend>
+  <exec_depend>python3-librosa-pip</exec_depend>
+  <exec_depend>python3-noisereduce-pip</exec_depend>
+  <exec_depend>python3-google-generativeai-pip</exec_depend>
+  <exec_depend>python3-ffmpeg</exec_depend>
+  
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+  <test_depend>python3-openai-whisper</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
