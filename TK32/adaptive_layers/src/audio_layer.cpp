@@ -29,9 +29,19 @@ namespace adaptive_layers{
         
         matchSize();
 
-        audio_sub_ = node->create_subscription<std_msgs::msg::UInt8MultiArray>(
+        // Matching QoS for init map
+        rclcpp::QoS qos_init(rclcpp::KeepLast(1));
+        qos_init.reliable();
+        qos_init.transient_local();
+
+        // Subsrciber
+        init_audio_sub_ = node->create_subscription<fortis_interfaces::msg::MapCost>(
+            "~/init_audio_costs",
+            qos_init,
+            std::bind(&AudioLayer::initAudioMapCallback, this, std::placeholders::_1));
+        audio_sub_ = node->create_subscription<fortis_interfaces::msg::MapCost>(
             "~/audio_costs",
-            rclcpp::QoS(1),
+            1,
             std::bind(&AudioLayer::audioMapCallback, this, std::placeholders::_1));
         //layerSizePub_ = this->create_publisher<std_msgs::msg::Float32>("my_topic", 10);
         RCLCPP_INFO(logger_, "AudioLayer initialized, enabled=%s", enabled_ ? "true" : "false");
@@ -62,6 +72,10 @@ namespace adaptive_layers{
             return;
         }
 
+        if (!update_required_) {
+            return;
+        }
+
         if(need_resize){
             matchSize();
             return;
@@ -70,10 +84,14 @@ namespace adaptive_layers{
         std::lock_guard<std::mutex> lock(audio_mutex_);
 
         // setting the whole map as a cost map for this layer while respecting other layers contribution
-        *min_x = std::min(*min_x, getOriginX());
-        *min_y = std::min(*min_y, getOriginY());
-        *max_x = std::max(*max_x, getOriginX() + getSizeInCellsX() * getResolution());
-        *max_y = std::max(*max_y, getOriginY() + getSizeInCellsY() * getResolution());
+        double resolution = getResolution();
+        *min_x = std::min(*min_x, new_min_i_*resolution);
+        *min_y = std::min(*min_y, new_min_j_*resolution);
+        *max_x = std::max(*max_x, (new_min_i_+new_width_) * resolution);
+        *max_y = std::max(*max_y, (new_min_j_+new_height_) * resolution);
+
+        // Audio has been modified
+        update_required_ = false;
     }
 
     void AudioLayer::updateCosts(nav2_costmap_2d::Costmap2D& master_grid, 
@@ -84,6 +102,8 @@ namespace adaptive_layers{
             RCLCPP_WARN_ONCE(logger_, "Audio Layer is not enabled or the bounds are not ready!!");
             return;
         }
+
+        //RCLCPP_INFO(logger_, "min_i: %d, min_j: %d, max_i: %d, max_j: %d", min_i, min_j, max_i, max_j);
 
         // Lock the modification of this layer and the master layer
         std::lock_guard<std::mutex> lock(audio_mutex_);
@@ -116,8 +136,49 @@ namespace adaptive_layers{
         memset(map, 0, getSizeInCellsX() * getSizeInCellsY());
         need_resize = true;
     }
+
+    void AudioLayer::audioMapCallback(const fortis_interfaces::msg::MapCost::SharedPtr msg){
+        // This thing to check size
+        /*if (msg->data.size() != audio_costs_.size()) {
+            RCLCPP_WARN_THROTTLE(
+            logger_, *node_.lock()->get_clock(), 2000,
+            "Audio cost array size mismatch: got %zu, expected %zu",
+            msg->data.size(), audio_costs_.size());
+            need_resize = true;
+            return;
+        }*/
+
+        // Lock :)
+        std::lock_guard<std::mutex> lock(audio_mutex_);
+
+        // Message-reading -hours
+        //double resolution = getResolution();
+        new_min_i_ = msg->i;
+        new_min_j_ = msg->j;
+        new_width_ = msg->width;
+        new_height_ = msg->height;
+
+        // Loopedy-loop
+        for (int j = 0; j < new_height_; ++j) {
+            for (int i = 0; i < new_width_; ++i) {
+                uint8_t value = msg->data[i + j * new_width_];
+                // Adding or removing
+                if (value == 255) {    // Removing (want to avoid a rectangular remove)
+                    audio_costs_[(i + new_min_i_) + (j + new_min_j_) * getSizeInCellsX()] = 0;
+                } else if (value != 0) {    // Adding (just replace with new values)
+                    audio_costs_[(i + new_min_i_) + (j + new_min_j_) * getSizeInCellsX()] = value;
+                }
+                
+            }
+        }
+        update_required_ = true;
+    }
     
-    void AudioLayer::audioMapCallback(const std_msgs::msg::UInt8MultiArray::SharedPtr msg){
+    void AudioLayer::initAudioMapCallback(const fortis_interfaces::msg::MapCost::SharedPtr msg){
+        if (map_init_) {
+            return;
+        }
+
         if (msg->data.size() != audio_costs_.size()) {
             RCLCPP_WARN_THROTTLE(
             logger_, *node_.lock()->get_clock(), 2000,
@@ -128,10 +189,18 @@ namespace adaptive_layers{
         }
         std::lock_guard<std::mutex> lock(audio_mutex_);
 
+        // First update should update everything
+        new_min_i_ = getOriginX();
+        new_min_j_ = getOriginY();
+        new_width_ = getSizeInCellsX();
+        new_height_ = getSizeInCellsY();
+
         for (size_t i = 0; i < audio_costs_.size(); ++i) {
             audio_costs_[i] = msg->data[i];
         }
         //printCostHistogram(audio_costs_, "received cost");
+        map_init_ = true;
+        update_required_ = true;
     }
 }  // namespace adaptive_layers
 #include "pluginlib/class_list_macros.hpp"

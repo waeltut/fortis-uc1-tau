@@ -9,6 +9,7 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(nav2_costmap_2d REQUIRED)
+find_package(fortis_interfaces REQUIRED)
 find_package(pluginlib REQUIRED)
 
 add_library(adaptive_layers SHARED
@@ -24,6 +25,7 @@ target_include_directories(adaptive_layers PUBLIC
 ament_target_dependencies(adaptive_layers
   rclcpp
   nav2_costmap_2d
+  fortis_interfaces
   pluginlib
 )
 

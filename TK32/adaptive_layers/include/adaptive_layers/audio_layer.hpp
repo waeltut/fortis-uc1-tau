@@ -9,6 +9,7 @@
 #include "nav2_costmap_2d/costmap_layer.hpp"
 #include "nav2_costmap_2d/costmap_math.hpp"
 #include "nav2_costmap_2d/footprint.hpp"
+#include "fortis_interfaces/msg/map_cost.hpp"
 #include "rclcpp/parameter_events_filter.hpp"
 #include <map>
 #include <iostream>
@@ -30,17 +31,25 @@ namespace adaptive_layers
         void matchSize() override;
 
         private:
-        //variables
-        
         double param_1_;
         bool need_resize;
         std::vector<uint8_t> audio_costs_;
         std::mutex audio_mutex_;
 
+        // Variables A'La Peetu
+        bool map_init_ = false;
+        bool update_required_ = false;
+        double new_min_i_;
+        double new_min_j_;
+        double new_width_;
+        double new_height_;
+
         // functions
 
-        void audioMapCallback(const std_msgs::msg::UInt8MultiArray::SharedPtr msg);
-        rclcpp::Subscription<std_msgs::msg::UInt8MultiArray>::SharedPtr audio_sub_;
+        void initAudioMapCallback(const fortis_interfaces::msg::MapCost::SharedPtr msg);
+        void audioMapCallback(const fortis_interfaces::msg::MapCost::SharedPtr msg);
+        rclcpp::Subscription<fortis_interfaces::msg::MapCost>::SharedPtr init_audio_sub_;
+        rclcpp::Subscription<fortis_interfaces::msg::MapCost>::SharedPtr audio_sub_;
         // rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr layerSizePub_;
 
     };
