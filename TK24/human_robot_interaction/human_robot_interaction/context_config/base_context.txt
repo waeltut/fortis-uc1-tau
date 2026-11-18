@@ -1,0 +1,1 @@
+the data receiver is an Automated guided vehicle, the data emitter is operator, location is factory floor. gestures and voice commands guide the vehicle to move right, left, back, forward or stop. interpret the integrated cue accordingly. in addition, when there are both voice and gesture commands at the same time, voice command can assign meaning to unknown gestures.
