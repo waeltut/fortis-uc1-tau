@@ -1,0 +1,87 @@
+conf: 0.3
+imgsz: 640
+tracker: beko_tracktrack.yaml  # relative paths are resolved against this file's directory
+jpeg_quality: 90  # JPEG round trip of every input frame before inference, as in the offline bag runs; omit/null = off
+sync:
+  max_sync_dt: 0.017  # s, max header-stamp gap between color and paired depth
+  depth_buffer: 4  # recent depth messages kept for pairing
+corridor:  # meters, camera optical frame (X right, Z forward)
+  robot_width: 0.56  # MiR width
+  side_margin: 0.20
+  x_cam: 0.0  # lateral center of the corridor in camera X
+  min_range: 0.3
+  max_range: 6.0
+assessment:
+  distance_percentile: 10  # of Z over the mask pixels
+  min_points: 20  # mask pixels with depth needed for a valid result
+  min_in_path_frac: 0.10  # fraction of those inside the corridor
+debouncer:  # checked in Phase 5, initial values kept
+  k: 3
+  n: 5
+warmup:
+  frames: 3  # blank frames run through the model and Z map before the first real one
+engine:  # only read with use_engine; the engine is built on first use, never copied
+  dir: /srv/models/yolo/engines  # engine cache, file names carry the TensorRT version; mount as a volume in Docker
+  half: true  # FP16 export
+buckets:  # every prompt name / visual label below must be mapped
+  necklace: dynamic
+  person: dynamic
+  forklift: dynamic
+  # AGV: dynamic
+  cardboard storage box: static
+  white plastic bag: static
+  plastic crate: static
+  bollard: static
+  cart1: static
+  cart2: static
+  # pallet truck: static
+objects:
+  - type: text
+    name: necklace
+  - type: text
+    name: person
+  - type: text
+    name: cardboard storage box
+  - type: text
+    name: white plastic bag
+  - type: text
+    name: plastic crate
+  - type: text
+    name: forklift
+  # - type: text
+  #   name: safety bollard
+  - type: visual
+    label: bollard
+    prompts:
+      - image: ../assets/beko/traffic_pole_1_1.png
+        bbox: [406, 80, 480, 380]
+      - image: ../assets/beko/traffic_pole_1_2.png
+        bbox: [40, 160, 90, 313]
+      - image: ../assets/beko/traffic_pole_1_3.png
+        bbox: [698, 162, 741, 309]
+      - image: ../assets/beko/traffic_pole_1_3.png
+        bbox: [427, 210, 445, 284]
+  #     - image: ../assets/beko/traffic_pole_1_4.png
+  #       bbox: [695, 140, 756, 338]
+      - image: ../assets/beko/traffic_pole_2.png
+        bbox: [455, 295, 695, 383]
+  #     - image: ../assets/beko/traffic_pole_3.png
+  #       bbox: [403, 324, 605, 475]
+  #     - image: ../assets/beko/traffic_pole_4.png
+  #       bbox: [313, 320, 790, 445]
+  #     - image: ../assets/beko/traffic_pole_5.png
+  #       bbox: [210, 287, 505, 390]
+  - type: visual
+    label: cart1
+    prompts:
+      - image: ../assets/beko/cart_1.png
+        bbox: [350, 25, 503, 293]
+  - type: visual
+    label: cart2
+    prompts:
+      - image: ../assets/beko/cart_2_1.png
+        bbox: [290, 15, 591, 330]
+      - image: ../assets/beko/cart_2_2.png
+        bbox: [210, 7, 518, 330]
+      - image: ../assets/beko/cart_2_3.png
+        bbox: [256, 20, 565, 330]
