@@ -123,6 +123,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-humble-cartographer-ros \
     ros-humble-rtabmap-ros \
     ros-humble-teleop-twist-keyboard \
+    ros-humble-vision-msgs \
+    ros-humble-spatio-temporal-voxel-layer \
     && rm -rf /var/lib/apt/lists/*
 
 # -------------------------

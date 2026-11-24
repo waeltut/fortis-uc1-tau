@@ -34,6 +34,7 @@
   },
   "workspaceFolder": "/home/fortis_dev/ros2_ws",
   "workspaceMount": "source=${localWorkspaceFolder},target=/home/fortis_dev/ros2_ws/src,type=bind",
+  "postCreateCommand": "python3 -m pip install -e /home/fortis_dev/ros2_ws/src/TK22/object_detection -e /home/fortis_dev/ros2_ws/src/TK24/text_to_speech",
   "postStartCommand": "colcon build --symlink-install",
   "containerEnv": {
         "DISPLAY": "${localEnv:DISPLAY}",
@@ -42,7 +43,8 @@
         //"QT_X11_NO_MITSHM": "1"
   },
   "mounts": [
-    "source=${env:HOME}/.ssh,target=/home/fortis_dev/.ssh,type=bind"
+    "source=${env:HOME}/.ssh,target=/home/fortis_dev/.ssh,type=bind",
+    "source=/srv/models,target=/srv/models,type=bind"
     ],
   "runArgs": [
     //"--gpus=all",

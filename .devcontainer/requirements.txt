@@ -31,14 +31,32 @@ tqdm==4.67.1
 triton
 typing_extensions==4.12.2
 tzdata==2025.1
-ultralytics==8.3.169
-ultralytics-thop==2.0.14
+ultralytics==8.4.115
+ultralytics-thop==2.2.5
 urllib3==2.2.3
 vosk==0.3.45
 websockets==13.1
 zipp==3.20.2
-sounddevice==0.5.5
+sounddevice==0.5.6
 librosa==0.11.0
 mediapipe==0.10.9
 noisereduce==3.0.3
 openai-whisper
+
+# Shared dependencies
+PyYAML==6.0.3
+loguru==0.8.0
+
+# Object detection
+lap==0.5.14
+onnx==1.17.0
+onnxslim==0.1.99
+git+https://github.com/ultralytics/CLIP.git@7ffa84b3bfa40c42ecc1c77147a855e69cb2dd40
+
+# Text-to-speech
+piper-tts==1.8.0
+python-dotenv==1.2.4
+
+# Development and testing
+ruff==0.17.5
+pytest==6.2.5
