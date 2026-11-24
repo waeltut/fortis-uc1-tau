@@ -76,6 +76,8 @@ class VolumeVisualizer(Node):
         try:data=json.loads(msg.data)
         except (ValueError,TypeError):return
         frame=data['frame'];lines=[f"Request {data['request_id']} | {data['stage']}"]
+        if data['stage'] == 'current_pose':
+            lines.append('Current pose accepted by IK. No navigation required.')
         for stage,pub in self.candidate_pubs.items():
             snapshot=data.get(stage);markers=[clear()]
             if snapshot:

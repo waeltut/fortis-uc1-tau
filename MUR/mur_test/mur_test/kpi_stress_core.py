@@ -16,7 +16,7 @@ from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
-VERSION = '1.0.0'
+VERSION = '1.1.0'
 PROFILES = {
     'pilot': {'repeat': 2, 'offsets': (.03, .10), 'directions': 4,
               'angles': (10,), 'axes': ('z',), 'multi_repetitions': 1,
@@ -122,7 +122,7 @@ def _moved(pose, delta=(0,0,0), axis=None, angle_deg=0):
     return tuple_to_pose(((p[0]+delta[0],p[1]+delta[1],p[2]+delta[2]),nq))
 
 
-def build_cases(reference, profile='standard', seed=2026):
+def build_cases(reference, profile='standard', seed=2026, center=None, orientation=None, max_yaw_deg=5., offset_scale=1.):
     """Build a deterministic, stratified benchmark anchored to observed TCP TF poses.
 
     Reference poses are positive controls. Perturbations are *unknown* feasibility,
@@ -162,6 +162,36 @@ def build_cases(reference, profile='standard', seed=2026):
             [reference['left'],reference['right']],['left','right'],
             control='positive', repeat_group='ref_both')
 
+    if not math.isfinite(max_yaw_deg) or not 0 <= max_yaw_deg <= 180:
+        raise ValueError('max_yaw_deg must be between 0 and 180')
+    if not math.isfinite(offset_scale) or offset_scale <= 0:
+        raise ValueError('offset_scale must be finite and positive')
+    if center is not None and (len(center) != 3 or not all(map(math.isfinite, center))):
+        raise ValueError('center must contain three finite map coordinates')
+    anchors = {}
+    for arm in ('left', 'right'):
+        xyz, q = pose_to_tuple(reference[arm])
+        anchors[arm] = tuple_to_pose((xyz if center is None else center,
+                                      q if orientation is None else unit_quaternion(orientation)))
+    reference = anchors
+    c = dict(c, offsets=[r * offset_scale for r in c['offsets']],
+             multi_offsets=[r * offset_scale for r in c['multi_offsets']])
+
+    def rotated(pose, delta, axis, degrees):
+        # Z means room heading (map Z). For tilted TCPs, local X/Y can also
+        # change heading. Shrink those rotations if they exceed the yaw limit.
+        position, q = pose_to_tuple(_moved(pose, delta))
+        if axis == 'z':
+            degrees = math.copysign(min(abs(degrees), max_yaw_deg), degrees)
+            out = qmul(axis_angle('z', math.radians(degrees)), q)
+        else:
+            while True:
+                out = qmul(q, axis_angle(axis, math.radians(degrees)))
+                if math.degrees(angle_difference(yaw_of(out), yaw_of(q))) <= max_yaw_deg + 1e-9:
+                    break
+                degrees = degrees / 2 if abs(degrees) > 1e-6 else 0.
+        return tuple_to_pose((position, unit_quaternion(out))), abs(degrees)
+
     # XYZ workspace slices. Directions lie in 3D with varied Z, not a fixed height.
     for arm in ('left','right'):
         ref=reference[arm]
@@ -184,9 +214,12 @@ def build_cases(reference, profile='standard', seed=2026):
         for angle in c['angles']:
             for axis in c['axes']:
                 for sign in (-1,1):
-                    add('rotation_%s_%s_%ddeg'%(arm,axis,angle),
-                        'orientation',[_moved(reference[arm],axis=axis,angle_deg=sign*angle)],
-                        [arm],rotation=abs(angle),extra={'rotation_axis':axis,
+                    degrees = (angle / max(c['angles']) * min(max(c['angles']), max_yaw_deg)
+                               if axis == 'z' else angle)
+                    target, actual = rotated(reference[arm], (0, 0, 0), axis, sign * degrees)
+                    add('rotation_%s_%s_%gdeg'%(arm,axis,actual),
+                        'orientation',[target],
+                        [arm],rotation=actual,extra={'rotation_axis':axis,
                                                          'rotation_sign':sign})
 
     # Single-arm waypoint clusters and constrained dual-arm clusters.
@@ -226,10 +259,10 @@ def build_cases(reference, profile='standard', seed=2026):
             radius=c['offsets'][(rep*3+2)%len(c['offsets'])]
             theta=rng.uniform(-math.pi,math.pi)
             angle=[10.,20.,30.][rep%3]
-            target=_moved(reference[arm],
+            target, angle=rotated(reference[arm],
                           (radius*math.cos(theta),radius*math.sin(theta),
                            radius*rng.uniform(-.4,.4)),
-                          axis=('x','y','z')[rep%3],angle_deg=angle*((-1)**rep))
+                          axis=('x','y','z')[rep%3],degrees=angle*((-1)**rep))
             add('coupled_%s'%arm,'coupled',[target],[arm],radius,angle)
 
     # Intentionally extreme Z negative controls (do not mix with coverage %).
@@ -333,7 +366,7 @@ def summarize(rows, suite_total=0):
     positives=[r for r in rows if r.get('control')=='positive']
     negative=[r for r in rows if r.get('control')=='negative']
     selected=[r for r in rows if r.get('status')=='success']
-    nav=[r for r in selected if r.get('nav_status') not in ('',None,'not_checked')]
+    nav=[r for r in selected if r.get('nav_status') not in ('',None,'not_checked','not_required')]
     check_ik=[r for r in selected if r.get('ik_status') not in ('',None,'not_checked')]
     def group_summary(rs):
         s=[r for r in rs if r.get('status')=='success']
@@ -358,6 +391,9 @@ def summarize(rows, suite_total=0):
         'negative_control_rejection':rate(negative,lambda r:r.get('status')=='no_solution'),
         'nav2_conditional_on_selection':rate(nav,lambda r:r.get('nav_status')=='success'),
         'nav2_attempted_count':len(nav),
+        'current_pose_count':sum(r.get('nav_status')=='not_required' for r in selected),
+        'current_pose_latency_s':distribution(r.get('time_s') for r in selected if r.get('nav_status')=='not_required'),
+        'reposition_selection_latency_s':distribution(r.get('time_s') for r in selected if r.get('nav_status')!='not_required'),
         'joint_selection_and_nav2_success':rate(real,lambda r:r.get('status')=='success' and r.get('nav_status')=='success') if nav else None,
         'nav2_path_length_m':distribution(r.get('path_length_m') for r in nav if r.get('nav_status')=='success'),
         'nav2_path_efficiency':distribution(r.get('path_efficiency') for r in nav if r.get('nav_status')=='success'),
@@ -433,7 +469,10 @@ def markdown_report(summary,manifest):
            f'| Reference positive controls | {pct(s["positive_controls"]["selection"])} |',
            f'| Perturbed target selection | {pct(s["perturbation_only"]["selection"])} |',
            f'| Negative controls correctly rejected | {pct(s["negative_control_rejection"])} |',
-           f'| Nav2 planned paths, conditional on selection | {pct(s["nav2_conditional_on_selection"])} |',
+           f'| Nav2 paths found / path checks attempted | {pct(s["nav2_conditional_on_selection"])} |',
+           f'| Selections needing no navigation | {s["current_pose_count"]} |',
+           f'| Current-stance median latency | {fmt(s["current_pose_latency_s"]["median"])} s |',
+           f'| Reposition selection median latency | {fmt(s["reposition_selection_latency_s"]["median"])} s |',
            f'| Selector median latency | {fmt(s["all_requests"]["selector_latency_s"]["median"])} s |',
            f'| Selector P95 latency | {fmt(s["all_requests"]["selector_latency_s"]["p95"])} s |',
            f'| Nav2 mean path efficiency | {fmt(s["nav2_path_efficiency"]["mean"],3)} |',
@@ -467,7 +506,7 @@ def html_report(summary, manifest):
     nav=summary['nav2_conditional_on_selection'];pert=summary['perturbation_only']['selection']
     ref=summary['positive_controls']['selection'];lat=summary['all_requests']['selector_latency_s']
     cards=[('Reference controls',p(ref['percent'])),('Perturbed selection',p(pert['percent'])),
-           ('Nav2 paths / selected',p(nav['percent'])),('Median response',f(lat['median'])+' s'),
+           ('Nav2 paths / checks',p(nav['percent'])),('Stayed at current pose',str(summary['current_pose_count'])),('Median response',f(lat['median'])+' s'),
            ('P95 response',f(lat['p95'])+' s'),('Cases finished',f'{summary["completed"]} / {summary["total_cases"]}')]
     card_html=''.join('<div class="card"><div class="muted">%s</div><strong>%s</strong></div>'%(esc(k),esc(v)) for k,v in cards)
     notes=''.join('<li>'+esc(n)+'</li>' for n in summary['notes'])

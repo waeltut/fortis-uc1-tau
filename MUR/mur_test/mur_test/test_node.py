@@ -291,7 +291,7 @@ class MurTest(Node):
                     print('Shared base: (%.3f, %.3f). Assignments: %s' % (
                         base.pose.position.x, base.pose.position.y,
                         ', '.join('P%d=%s' % (i+1,a) for i,a in enumerate(result.point_arms))))
-                    if not self.confirm('Navigate MiR to this destination?'):
+                    if result.requires_navigation and not self.confirm('Navigate MiR to this destination?'):
                         continue
                     if time.monotonic() >= expiry:
                         print('Selection expired. Recalculating; confirm the fresh destination.')
@@ -299,9 +299,12 @@ class MurTest(Node):
                         base = self.transform_to(result.navigation_goal, str(self.p('base_goal_frame')))
                         expiry = time.monotonic() + result.valid_for_seconds
                         print('Fresh shared base: (%.3f, %.3f)' % (base.pose.position.x,base.pose.position.y))
-                        if not self.confirm('Navigate MiR to this fresh destination?'): continue
+                        if result.requires_navigation and not self.confirm('Navigate MiR to this fresh destination?'): continue
                         if time.monotonic() >= expiry: raise RuntimeError('Selection expired again; retry workspace')
-                    self.navigate(base, generation)
+                    if result.requires_navigation:
+                        self.navigate(base, generation)
+                    else:
+                        print('All points reachable here. Skipping MiR navigation.')
                     self.log_actual_arrival(base)
                     while rclpy.ok() and self.motion_fault is None:
                         print('Points: ' + ', '.join('P%d (%s)' % (i+1,a) for i,a in enumerate(result.point_arms)))

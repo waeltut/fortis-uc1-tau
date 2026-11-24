@@ -21,6 +21,8 @@ exec(compile(tree,str(path),'exec'),m.__dict__)
 
 def node(rows=None):
     n=transport.node();n.__class__=m.VolumeSelector;n.cfg.update(m.DEFAULTS);n.cfg.update(left_preferred_distance=.65,right_preferred_distance=.65,left_facing_min_deg=0.,left_facing_max_deg=60.,right_facing_min_deg=-60.,right_facing_max_deg=0.);n.cfg['target_feasible_paths']=3;n.cfg['max_path_checks']=8
+    n.ik_client=NS(service_is_ready=lambda:False)
+    n.cfg['check_nav2_paths']=True
     n.publish_target=lambda:None;n.check_model=lambda *a:None;n.cache_context=lambda:None
     n.lookup=lambda *a:NS(transform=NS(translation=NS(x=0.,y=0.,z=0.),rotation=NS(x=0.,y=0.,z=0.,w=1.)))
     grid=Grid(np.zeros((50,50)),50,50,.2,(-5,-5,0))
@@ -54,6 +56,69 @@ class VolumeWorkflowTests(unittest.TestCase):
         self.assertEqual(messages[-1]['cache']['counts']['total'],4)
         self.assertEqual(messages[-1]['shortlist']['counts']['forward_30deg'],4)
         self.assertTrue(result(n)['valid'])
+
+    def test_no_path_mode_skips_planner_and_rechecks_destination(self):
+        n=node()
+        n.cfg['check_nav2_paths']=False
+        n.planner=None
+        n.compute_path=n.check_path=lambda *a:self.fail('Unexpected planner call')
+        checks=[]
+        n.polygon_check=lambda *a:(checks.append(True) or True,'',.2)
+        n.run(transport.PoseStamped())
+        r=result(n)
+        self.assertTrue(r['requires_navigation'])
+        self.assertFalse(r['path_checked'])
+        self.assertIsNone(r['path_length_m'])
+        self.assertGreater(len(checks),1)
+
+    def test_live_ik_assignment_requires_every_requested_arm(self):
+        from unittest.mock import patch
+        from time import monotonic
+        n=node()
+        n.volume.arm_names=['left','right']
+        n.volume.meta['context']={'reference_frame':'mur',
+                                  'groups':{'left':'lg','right':'rg'},
+                                  'tips':{'left':'lt','right':'rt'}}
+        calls=[]
+        client=NS(service_is_ready=lambda:True)
+        def call(req):
+            ik=req.ik_request
+            calls.append(ik.group_name)
+            self.assertTrue(ik.avoid_collisions)
+            self.assertEqual(ik.robot_state.joint_state.name,['joint'])
+            return ik.group_name
+        client.call_async=call
+        n.ik_client=client
+        def request():
+            return NS(ik_request=NS(robot_state=NS(joint_state=NS())))
+        srv=NS(GetPositionIK=NS(Request=request))
+        duration=NS(Duration=lambda seconds:NS(to_msg=lambda:seconds))
+        with patch.dict(sys.modules,{'moveit_msgs.srv':srv,'rclpy.duration':duration}):
+            for modes, answers, expected in [
+                (['either','right'],[False,True,True],['right','right']),
+                (['both'],[True,False],None),
+                (['both'],[True,True],['both']),
+                (['left','right'],[True,False],None)]:
+                codes=iter(answers)
+                n.wait=lambda *_:NS(error_code=NS(val=1 if next(codes) else -31))
+                stats={'online_ik_checks':0}
+                got=n.current_pose_arms([transport.PoseStamped()]*len(modes),modes,
+                                        {'joint':.3},monotonic()+1.,stats)
+                self.assertEqual(got,expected)
+                self.assertEqual(stats['online_ik_checks'],len(answers))
+
+    def test_current_stance_preempts_volume_and_path_search(self):
+        n=node()
+        n.robot_pose=lambda:(.6, .4, .3)
+        n.current_pose_arms=lambda *args:['left','both']
+        n.volume.query=lambda *a:self.fail('Unexpected volume search')
+        n.planner=None
+        n.run([transport.PoseStamped()]*2,['either','both'])
+        r=result(n)
+        self.assertFalse(r['requires_navigation'])
+        self.assertEqual(r['point_arms'],['left','both'])
+        self.assertEqual(r['pose'],[.6,.4,.3])
+        self.assertTrue(r['exact_target_ik_verified'])
 
     def test_zero_ik_and_multiple_paths(self):
         n=node();n.run(transport.PoseStamped());r=result(n)

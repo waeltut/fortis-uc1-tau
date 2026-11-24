@@ -1,4 +1,4 @@
-"""Volume-only reachability selection. Never imports/constructs an IK engine."""
+"""Volume-based selection with bounded MoveIt IK at the current base pose."""
 import copy
 from decimal import Decimal, InvalidOperation
 from xml.etree import ElementTree as ET
@@ -26,6 +26,7 @@ from .robot_config import monitored_joints
 
 DEFAULTS={
  'volume_file':DEFAULT_VOLUME_FILE,
+ 'check_nav2_paths':False, 'current_pose_ik_budget':1.0, 'ik_service':'/compute_ik',
  'orientation_profiles_deg':[70.0,90.0,120.0],
  'publish_visualization_data':True,'visualization_max_candidates':6000,
  'selection_budget':12.0,'final_validation_reserve':2.0,'travel_field_budget':2.0,
@@ -304,6 +305,8 @@ class VolumeSelector(BaseSelector):
             if self.cfg['front_fov_deg']>generated['workspace_fov_deg'] or abs(self.cfg['front_yaw_offset_deg']-generated['workspace_front_offset_deg'])>1e-9:
                 raise ValueError('Requested FOV exceeds cache or front offset differs; regenerate cache')
             self.model_client=self.create_client(GetParameters,self.volume.meta["context"]["source_node"].rstrip("/")+"/get_parameters",callback_group=self.group)
+            from moveit_msgs.srv import GetPositionIK
+            self.ik_client = self.create_client(GetPositionIK, self.cfg['ik_service'], callback_group=self.group)
             self._model_normalization_logged=set()
             self.visual_target=None
             qos=QoSProfile(depth=1,reliability=ReliabilityPolicy.RELIABLE,durability=DurabilityPolicy.TRANSIENT_LOCAL)
@@ -311,7 +314,7 @@ class VolumeSelector(BaseSelector):
             self.visualization_snapshot={}
             self.target_markers_pub=self.create_publisher(MarkerArray,'/base_selection/target_markers',qos)
             self.selection_service=self.create_service(SelectBase,'/base_selection/select',self.select_service,callback_group=self.group)
-            self.status('idle','Volume selector ready; zero online IK. Selection only; no motion commands.',cache_id=self.volume.meta['cache_id'])
+            self.status('idle','Volume selector ready; current-pose IK enabled. Selection only; no motion commands.',cache_id=self.volume.meta['cache_id'])
         except Exception:
             self.tf_receiver.close();self.destroy_node();raise
 
@@ -339,6 +342,7 @@ class VolumeSelector(BaseSelector):
         response.request_id=outcome['request_id']
         if response.success:
             result=outcome['result']
+            response.requires_navigation=result.get('requires_navigation',True)
             response.navigation_goal=outcome['pose'];response.arm=result['arm']
             response.point_arms=result.get('point_arms',[result['arm']])
             names=list(dict.fromkeys(n for a in response.point_arms for n in (self.volume.arm_names if a=='both' else [a])))
@@ -403,6 +407,7 @@ class VolumeSelector(BaseSelector):
         if any(c[k]<=0 for k in positive):raise ValueError('Counts/scales/budgets must be positive')
         for k in ('ranking_pool_size','max_destination_checks','target_feasible_paths','yaw_bins'):
             if not isinstance(c[k],int):raise ValueError(k+' must be integer')
+        if c['current_pose_ik_budget'] < 0:raise ValueError('Negative current_pose_ik_budget')
         if c['yaw_bins']>360 or c['ranking_pool_size']<c['max_destination_checks'] or c['target_feasible_paths']>c['max_path_checks']:raise ValueError('Invalid candidate limits')
         if c['final_validation_reserve']>=c['selection_budget']:raise ValueError('Final reserve must be below total budget')
         if not isinstance(c['orientation_profiles_deg'],(list,tuple)) or not c['orientation_profiles_deg'] or not all(isinstance(v,(float,int)) and math.isfinite(v) for v in c['orientation_profiles_deg']):raise ValueError('orientation_profiles_deg must be a nonempty numeric list')
@@ -467,12 +472,82 @@ class VolumeSelector(BaseSelector):
                 self.cfg['weight_destination_cost']*destination_cost+
                 working_score(distance,c.bearing,c.arm,self.cfg))
 
+    def current_pose_arms(self, targets, modes, joints, deadline, stats):
+        """Resolve every point independently, matching SelectBase's 'both' contract."""
+        if time.monotonic() >= deadline or not self.ik_client.service_is_ready():
+            return None
+        from moveit_msgs.srv import GetPositionIK
+        from rclpy.duration import Duration
+
+        context = self.volume.meta['context']
+        resolved = []
+        for target, mode in zip(targets, modes):
+            local = self.transform_target(target, self.cfg['base_frame'])
+            p = local.pose.position
+            bearing = math.atan2(p.y, p.x) - math.radians(self.cfg['front_yaw_offset_deg'])
+            if abs(math.atan2(math.sin(bearing), math.cos(bearing))) > math.radians(self.cfg['front_fov_deg']) / 2:
+                return None
+            arms = self.volume.arm_names if mode in ('either', 'both') else [mode]
+            target_ref = self.transform_target(target, context['reference_frame'])
+            for arm in arms:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return None
+                request = GetPositionIK.Request()
+                ik = request.ik_request
+                ik.group_name = context['groups'][arm]
+                ik.ik_link_name = context['tips'][arm]
+                ik.pose_stamped = target_ref
+                ik.avoid_collisions = True
+                ik.robot_state.is_diff = True
+                ik.robot_state.joint_state.name = list(joints)
+                ik.robot_state.joint_state.position = list(joints.values())
+                ik.timeout = Duration(seconds=min(0.2, remaining)).to_msg()
+                stats['online_ik_checks'] += 1
+                future = self.ik_client.call_async(request)
+                try:
+                    reply = self.wait(future, remaining)
+                except Cancelled:
+                    raise
+                except SelectionError:
+                    future.cancel()
+                    return None
+                if reply.error_code.val == 1:
+                    if mode != 'both':
+                        resolved.append(arm)
+                        break
+                elif mode != 'either':
+                    return None
+            else:
+                if mode != 'both':
+                    return None
+                resolved.append('both')
+        return resolved
+
+    def publish_selection(self, result, candidate, candidates, start, joints, outcome):
+        pose = pose_msg(candidate.pose, self.cfg['fixed_frame'])
+        pose.header.stamp = self.get_clock().now().to_msg()
+        path = NavPath()
+        path.header = copy.deepcopy(pose.header)
+        path.poses = [pose_msg(p, self.cfg['fixed_frame']) for p in candidate.path]
+        with self.lock:
+            self.checkpoint()
+            self.selection_deadline = time.monotonic() + self.cfg['selection_ttl']
+            self.selected_context = (start, joints)
+            self.result_pub.publish(String(data=json.dumps(result, allow_nan=False)))
+            self.path_pub.publish(path)
+            self.valid_pub.publish(Bool(data=True))
+            self.publish_markers(candidates)
+            message = 'Selected navigation pose' if result['requires_navigation'] else 'All targets reachable from current pose'
+            self.status('selected', message, **result)
+            outcome.update(success=True, message=message, result=result, pose=pose)
+
     def run(self,target,arm_mode=None,completion=None):
         started=time.monotonic();deadline=started+self.cfg['selection_budget'];search_end=deadline-self.cfg['final_validation_reserve']
         timings={};candidates=[];feasible=[];paths=destinations=0
         outcome={'success':False,'message':'Selection interrupted','request_id':self.sequence}
         try:
-            self.status('checking','Checking robot state and Nav2; volume reachability uses no IK')
+            self.status('checking','Checking current stance and robot state')
             self.wait_for_inputs(search_end)
             targets=target if isinstance(target,list) else [target]
             modes=arm_mode if isinstance(arm_mode,list) else [arm_mode or self.cfg['arm_mode']]
@@ -482,14 +557,46 @@ class VolumeSelector(BaseSelector):
             self.visual_stage('checking',goal=[frozen.pose.position.x,frozen.pose.position.y,frozen.pose.position.z])
             self.publish_target();self.check_model(search_end);start,joints=self.robot_pose(),self.joint_snapshot();self.cache_context()
             footprint=self.footprint_snapshot()
-            if not self.planner.wait_for_server(timeout_sec=self.remaining(search_end,self.cfg['service_timeout'])):raise SelectionError('Nav2 planner unavailable')
-            maps=self.costmaps(search_end);base=self.lookup(self.cfg['fixed_frame'],self.cfg['base_frame']).transform
+            base=self.lookup(self.cfg['fixed_frame'],self.cfg['base_frame']).transform
             timings['setup_seconds']=time.monotonic()-started
             p=frozen.pose.position;goal=[p.x,p.y,p.z,*quaternion(frozen.pose.orientation)]
+            goals=[[t.pose.position.x,t.pose.position.y,t.pose.position.z,*quaternion(t.pose.orientation)] for t in frozen_targets]
+            stats = {'online_ik_checks': 0}
+            phase = time.monotonic()
+            try:
+                arm_choices = self.current_pose_arms(frozen_targets, modes, joints,
+                    min(search_end, phase + self.cfg['current_pose_ik_budget']), stats)
+            except Cancelled:
+                raise
+            except SelectionError:
+                arm_choices = None
+            timings['current_pose_seconds'] = time.monotonic() - phase
+            if arm_choices:
+                map_start = time.monotonic()
+                maps = self.costmaps(search_end)
+                clear, _, cost = self.polygon_check(transform_points(self.footprint_snapshot(), start), maps)
+                self.guard_motion(start, joints)
+                self.remaining(search_end, 1.)
+                if clear and time.monotonic() - map_start <= self.cfg['max_data_age']:
+                    arm = arm_choices[0] if len(set(arm_choices)) == 1 else 'mixed'
+                    current = Candidate(0, start, arm, score=0., state='selected')
+                    result = dict(request_id=self.sequence, valid=True, frame_id=self.cfg['fixed_frame'],
+                        arm=arm, point_arms=arm_choices, point_requirements=modes, point_targets=goals,
+                        pose=list(start), score=0., valid_for_seconds=self.cfg['selection_ttl'],
+                        requires_navigation=False, path_checked=False, path_checks=0, feasible_paths=0,
+                        path_length_m=0., path_cost=None, destination_cost=cost, timings=timings,
+                        reachability_evidence='current_pose_collision_aware_ik', exact_target_ik_verified=True,
+                        combined_arm_collision_checked=False, elapsed_seconds=time.monotonic()-started, **stats)
+                    self.visual_stage('current_pose')
+                    self.publish_selection(result, current, [current], start, joints, outcome)
+                    return
+            check_paths = self.cfg['check_nav2_paths']
+            if check_paths and not self.planner.wait_for_server(timeout_sec=self.remaining(search_end,self.cfg['service_timeout'])):
+                raise SelectionError('Nav2 planner unavailable')
+            maps = self.costmaps(search_end)
             phase=time.monotonic()
             def checkpoint():self.remaining(search_end,self.cfg['selection_budget'])
             rows=self.volume.query(goal,base.translation.z,self.cfg['yaw_bins'],self.cfg['minimum_orientation_coverage'],self.cfg['max_height_error'],self.cfg['max_orientation_error_deg'],self.cfg['front_fov_deg'],self.cfg['front_yaw_offset_deg'],modes[0],checkpoint,True)
-            goals=[[t.pose.position.x,t.pose.position.y,t.pose.position.z,*quaternion(t.pose.orientation)] for t in frozen_targets]
             assignments={}
             if len(goals)>1:
                 # Seed a common base-pose lattice from P1, then test every remaining
@@ -538,6 +645,10 @@ class VolumeSelector(BaseSelector):
                 timings['destination_seconds']+=time.monotonic()-phase
                 if not ok:c.state=reason;continue
                 c.destination_cost=cost;c.state='destination_clear'
+                if not check_paths:
+                    c.score = self.score_candidate(c, c.travel, cost, goal)
+                    feasible.append(c)
+                    continue
                 self.status('planning',f'Checking Nav2 path {paths+1}/{self.cfg["max_path_checks"]}; no online IK')
                 phase=time.monotonic()
                 try:poses,reason=self.compute_path(c,start,search_end)
@@ -555,38 +666,37 @@ class VolumeSelector(BaseSelector):
                 c.path=poses;c.length=path_length(poses);c.cost=path_cost
                 c.score=self.score_candidate(c,c.length*(1+self.cfg['travel_inflation_weight']*path_cost),c.destination_cost,goal)
                 c.state='path_checked';feasible.append(c);self.publish_markers(candidates)
-            if not feasible:raise SelectionError(f'No validated path within limits; volume_candidates={len(rows)}, destination_checks={destinations}, paths={paths}, travel_field_truncated={field.truncated}')
+            if not feasible:raise SelectionError(f'No acceptable destination within search limits; volume_candidates={len(rows)}, destination_checks={destinations}, paths={paths}, travel_field_truncated={field.truncated}')
             phase=time.monotonic();self.guard_motion(start,joints);self.cache_context()
             maps,footprint=self.costmaps(deadline),self.footprint_snapshot();fresh=time.monotonic();chosen=None
             for c in sorted(feasible,key=lambda c:c.score):
                 self.remaining(deadline,1.)
                 ok,reason,cost=self.polygon_check(transform_points(footprint,c.pose),maps)
                 if not ok:continue
+                if not check_paths:
+                    c.destination_cost = cost
+                    c.score = self.score_candidate(c, c.travel, cost, goal)
+                    chosen = c
+                    break
                 ok,reason,path_cost=self.check_path(c.path,footprint,maps,deadline)
                 if ok:
                     c.destination_cost=cost;c.cost=path_cost;c.score=self.score_candidate(c,c.length*(1+self.cfg['travel_inflation_weight']*path_cost),cost,goal);chosen=c;break
-            if chosen is None:raise SelectionError('All shortlisted paths invalidated by fresh costmaps')
+            if chosen is None:raise SelectionError('All shortlisted candidates invalidated by fresh costmaps')
             self.remaining(deadline,1.);self.guard_motion(start,joints)
             if time.monotonic()-fresh>self.cfg['max_data_age']:raise SelectionError('Final costmaps aged out')
             chosen.state='selected';timings['final_validation_seconds']=time.monotonic()-phase
-            pose=pose_msg(chosen.pose,self.cfg['fixed_frame']);pose.header.stamp=self.get_clock().now().to_msg()
-            path=NavPath();path.header=copy.deepcopy(pose.header);path.poses=[pose_msg(p,self.cfg['fixed_frame']) for p in chosen.path]
             result={'request_id':self.sequence,'valid':True,'frame_id':self.cfg['fixed_frame'],'arm':chosen.arm,'pose':list(chosen.pose),'score':chosen.score,
-                    'path_length_m':chosen.length,'path_cost':chosen.cost,'destination_cost':chosen.destination_cost,
-                    'cache_id':self.volume.meta['cache_id'],'reachability_evidence':'sampled_volume_lookup','online_ik_checks':0,
+                    'requires_navigation':True,'path_checked':check_paths,'path_length_m':chosen.length if check_paths else None,'path_cost':chosen.cost if check_paths else None,'destination_cost':chosen.destination_cost,
+                    'cache_id':self.volume.meta['cache_id'],'reachability_evidence':'sampled_volume_lookup','online_ik_checks':stats['online_ik_checks'],
                     'orientation_profiles':chosen.orientation_profiles,'active_profile_angles_deg':self.volume.profile_angles if hasattr(self.volume,'profile_angles') else [],'orientation_coverage':chosen.coverage,'height_error_m':chosen.height_error,'orientation_error_deg':math.degrees(chosen.rotation_error),
-                    'volume_candidates':len(rows),'ranking_pool':len(candidates),'destination_checks':destinations,'path_checks':paths,'feasible_paths':len(feasible),
+                    'volume_candidates':len(rows),'ranking_pool':len(candidates),'destination_checks':destinations,'path_checks':paths,'feasible_paths':len(feasible) if check_paths else 0,
                     'travel_field_truncated':field.truncated,'timings':timings,'elapsed_seconds':time.monotonic()-started,'valid_for_seconds':self.cfg['selection_ttl'],
                     'reachability_policy':'self_body_ignore_other_arm_v1','cached_self_body_collision_checked':True,'opposite_arm_collision_checked':False,'optimality_guaranteed':False,'exact_target_ik_verified':False,'environment_arm_collision_checked':False,'combined_arm_collision_checked':False,'joint_solutions':[]}
             result['point_arms']=[r[1] for r in chosen.point_rows] if hasattr(chosen,'point_rows') else [chosen.arm]
             result['point_requirements']=modes
             result['point_targets']=goals
             result['arm']=result['point_arms'][0] if len(set(result['point_arms']))==1 else 'mixed'
-            with self.lock:
-                self.checkpoint();self.selection_deadline=time.monotonic()+self.cfg['selection_ttl'];self.selected_context=(start,joints)
-                self.result_pub.publish(String(data=json.dumps(result,allow_nan=False)));self.path_pub.publish(path);self.valid_pub.publish(Bool(data=True));self.publish_markers(candidates)
-                self.status('selected',f'{chosen.arm}: {chosen.length:.2f} m path; cached volume, zero online IK',**result)
-                outcome.update(success=True,message='Selected navigation pose',result=result,pose=pose)
+            self.publish_selection(result, chosen, candidates, start, joints, outcome)
         except Exception as e:
             outcome.update(success=False,message=str(e))
             if rclpy.ok():

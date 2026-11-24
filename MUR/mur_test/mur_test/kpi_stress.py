@@ -258,12 +258,13 @@ def run(args):
                 snapshot=read_snapshot_ros(ros,left=args.left_tcp,right=args.right_tcp,
                                            base_frame=args.base_frame,mur_frame=args.mur_frame)
             validate_snapshot(snapshot)
-            cases=C.build_cases(snapshot,args.profile,args.seed)
+            cases=C.build_cases(snapshot,args.profile,args.seed,args.center,args.orientation,args.max_yaw_deg,args.offset_scale)
             manifest={'tool':'mur_kpi_stress','schema_version':C.VERSION,
                       'generated_utc':datetime.now(timezone.utc).isoformat(),
                       'profile':args.profile,'seed':args.seed,
                       'service':SERVICE,'service_type':EXPECTED_TYPE,
-                      'snapshot':snapshot,
+                      'snapshot':snapshot, 'center_map_xyz':args.center, 'orientation_xyzw':args.orientation,
+                      'max_yaw_deg':args.max_yaw_deg, 'offset_scale':args.offset_scale,
                       'options':{'nav2':args.nav2,'ik_robustness':args.ik_robustness,
                                  'ik_trials':args.ik_trials,'ik_every':args.ik_every,
                                  'robust_radius':args.robust_radius,'robust_yaw':args.robust_yaw},
@@ -337,7 +338,9 @@ def run(args):
                                 dist,change,facing=orient_and_distance(case,pose,snapshot)
                                 row.update(base_displacement_m=dist,base_heading_change_deg=change,
                                            target_facing_error_deg=facing)
-                                if args.nav2:
+                                if response.get('requires_navigation') is False:
+                                    row['nav_status'] = 'not_required'
+                                elif args.nav2:
                                     start=time.monotonic()
                                     # Humble set_message_fields may mutate nested input dictionaries.
                                     # Protect the response pose: virtual IK still needs it afterward.
@@ -403,7 +406,7 @@ def preview(args):
                                        base_frame=args.base_frame,mur_frame=args.mur_frame)
         finally:ros.shutdown()
     validate_snapshot(snapshot)
-    cases=C.build_cases(snapshot,args.profile,args.seed)
+    cases=C.build_cases(snapshot,args.profile,args.seed,args.center,args.orientation,args.max_yaw_deg,args.offset_scale)
     print(f'{len(cases)} generated cases. First {min(args.limit or 10,len(cases))}:')
     for case in cases[:args.limit or 10]:
         print('%4d %-26s %2d points %-20s position %.3f m rotation %.1f deg'%(
@@ -433,6 +436,10 @@ def main(argv=None):
     ap=argparse.ArgumentParser(description=__doc__,formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     ap.add_argument('mode',choices=('run','preview','report'))
     ap.add_argument('--profile',choices=tuple(C.PROFILES),default='standard')
+    ap.add_argument('--center', nargs=3, type=float, metavar=('X','Y','Z'), help='Map-frame TCP centre in metres for perturbed cases')
+    ap.add_argument('--orientation', nargs=4, type=float, metavar=('QX','QY','QZ','QW'), help='Map-frame TCP orientation; default uses each observed TCP quaternion')
+    ap.add_argument('--max-yaw-deg', type=float, default=5., help='Maximum absolute change in map heading of a perturbed TCP')
+    ap.add_argument('--offset-scale', type=float, default=1., help='Multiply profile translation offsets about each centre')
     ap.add_argument('--seed',type=int,default=2026)
     ap.add_argument('--out',default='/tmp/mur_kpi_stress',help='Output directory')
     ap.add_argument('--snapshot',help='Optional prior snapshot JSON; otherwise read live TCP poses from TF')

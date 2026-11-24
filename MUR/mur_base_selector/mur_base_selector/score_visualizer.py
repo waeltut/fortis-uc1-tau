@@ -252,6 +252,7 @@ class ScoreVisualizer(VolumeSelector):
                     if math.isfinite(cost):
                         x, y = cells[i]
                         centre_cost = min(int(grid.data[y, x]), 253)/253
+                        record['travel_estimate'] = float(cost)
                         record.update(state='estimated', scores=components(pose, arm, bearing, goal, float(cost), centre_cost, self.cfg))
                     records.append(record)
             self.guard_motion(start, joints)
@@ -265,7 +266,7 @@ class ScoreVisualizer(VolumeSelector):
                 # Check promising candidates first, then remaining cache candidates.
                 # No travel estimate is not proof of unreachability.
                 order = sorted(range(len(records)), key=lambda i: records[i]['scores']['total'] if records[i]['scores'] else math.inf)
-                if not self.planner.wait_for_server(timeout_sec=self.remaining(deadline, self.cfg['service_timeout'])):
+                if self.cfg['check_nav2_paths'] and not self.planner.wait_for_server(timeout_sec=self.remaining(deadline, self.cfg['service_timeout'])):
                     raise SelectionError('Nav2 planner unavailable')
                 for i in order:
                     if checked >= self.diag['max_detailed_candidates'] or time.monotonic() >= deadline:
@@ -275,6 +276,13 @@ class ScoreVisualizer(VolumeSelector):
                     ok, reason, destination = self.polygon_check(transform_points(footprint, r['pose']), maps)
                     if not ok:
                         r['state'] = 'destination_'+reason; continue
+                    if not self.cfg['check_nav2_paths']:
+                        if 'travel_estimate' in r:
+                            r.update(state='destination_clear', scores=components(
+                                r['pose'], r['arm'], r['bearing'], goal, r['travel_estimate'], destination, self.cfg))
+                        else:
+                            r['state'] = 'no_estimate'
+                        continue
                     c = Candidate(i, r['pose'], r['arm'])
                     try:
                         paths += 1
@@ -297,14 +305,14 @@ class ScoreVisualizer(VolumeSelector):
                 'request_id': self.sequence, 'state': 'complete', 'valid_for_navigation': False,
                 'frame': self.cfg['fixed_frame'], 'snapshot_stamp': {'sec': stamp.sec, 'nanosec': stamp.nanosec},
                 'target': goal, 'base_start': list(start), 'cache_id': self.volume.meta['cache_id'],
-                'mode': self.diag['mode'], 'candidate_count': len(rows), 'travel_field_truncated': truncated,
+                'mode': self.diag['mode'], 'check_nav2_paths': self.cfg['check_nav2_paths'], 'candidate_count': len(rows), 'travel_field_truncated': truncated,
                 'detailed_partial': partial, 'destination_checks': checked, 'path_requests': paths,
                 'groups': summaries,
                 'grid': {'origin': raster.origin, 'width': raster.width, 'height': raster.height, 'resolution': raster.resolution},
                 'score_max': self.diag['score_max'], 'component_values': 'weighted contributions of minimum-total winner',
                 'arm_order': self.volume.arm_names, 'selector_configuration': self.cfg, 'diagnostic_configuration': self.diag,
                 'elapsed_seconds': time.monotonic()-started,
-                'note': 'Historical diagnostic snapshot, not a navigation goal. Detailed Nav2 paths are planned against live Nav2 maps and checked against the captured maps; no final fresh-map validation.'}
+                'note': 'Historical diagnostic snapshot, not a navigation goal. Path requests are counted above. Scores use the captured costmaps without final fresh-map validation.'}
             with self.lock:
                 self.checkpoint()
                 self.metadata_pub.publish(String(data=json.dumps(metadata, allow_nan=False)))

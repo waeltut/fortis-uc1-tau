@@ -1,4 +1,4 @@
-# Online volume selector; no IK calls.
+# Online selector with collision-aware IK at the current stance.
 mur_base_selector:
   ros__parameters:
     fixed_frame: map
@@ -7,6 +7,8 @@ mur_base_selector:
     arm_mode: either
     service_timeout: 3.0
     planner_action: /compute_path_to_pose
+    check_nav2_paths: false
+    current_pose_ik_budget: 1.0
     planner_id: GridBased
     global_costmap_service: /global_costmap/get_costmap
     local_costmap_service: /local_costmap/get_costmap

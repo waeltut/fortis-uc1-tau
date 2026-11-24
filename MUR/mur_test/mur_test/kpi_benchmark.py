@@ -472,7 +472,7 @@ def make_summary(rows, cfg, service_type):
     def summarize(xs):
         counts = Counter(row['status'] for row in xs)
         successes = counts['success']
-        navs = [row for row in xs if row.get('nav_status') and row.get('nav_status') != 'not_checked']
+        navs = [row for row in xs if row.get('nav_status') and row.get('nav_status') not in ('not_checked','not_required')]
         n_pass = sum(row.get('nav_status') == 'success' for row in navs)
         times = numeric_summary([row.get('time_s') for row in xs])
         return dict(total=len(xs), statuses=dict(counts), success_percent=round(100*successes/len(xs), 2) if xs else None,
@@ -678,7 +678,9 @@ def main(argv=None):
                         row['selected_x'], row['selected_y'], row['selected_yaw_deg'] = x, y, yaw
                         if response_dump:
                             response_dump.write(json.dumps({'id':case['id'], 'response':response}, default=str)+'\n')
-                        if args.nav2 and status=='success':
+                        if status=='success' and response.get('requires_navigation') is False:
+                            row['nav_status'] = 'not_required'
+                        elif args.nav2 and status=='success':
                             if pose and pose['header'].get('frame_id', cfg.get('frame','map')) == cfg.get('frame','map'):
                                 nav_status, plen, eff = ros.compute_nav_path(pose, float(cfg.get('nav_timeout_s', 20)))
                                 row['nav_status'], row['path_length_m'], row['path_efficiency'] = nav_status, plen, eff

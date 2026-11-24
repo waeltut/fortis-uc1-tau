@@ -22,3 +22,6 @@ string diagnostics_json
 
 # One resolved arm per target, in request order. both means individually reachable.
 string[] point_arms
+
+# On success, false means all points passed IK at the measured current stance.
+bool requires_navigation
