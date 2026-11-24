@@ -1,0 +1,34 @@
+{
+    "items": [
+        {
+            "source": "Deteniendo el movimiento ahora.",
+            "english": "Stopping movement now.",
+            "command": "Stop"
+        },
+        {
+            "source": "Obstáculo detectado, por favor retírelo.",
+            "english": "Obstacle detected, please remove it.",
+            "command": "Stop"
+        },
+        {
+            "source": "Moviéndose a la izquierda.",
+            "english": "Moving to the left.",
+            "command": "Move left"
+        },
+        {
+            "source": "Gesto poco claro, por favor aclárelo.",
+            "english": "Unclear gesture, please clarify.",
+            "command": "Stop"
+        },
+        {
+            "source": "Batería baja, planifique recargarla pronto.",
+            "english": "Battery low, plan for recharging soon.",
+            "command": "Continue"
+        },
+        {
+            "source": "Batería al 42%.",
+            "english": "Battery at 42%.",
+            "command": "Continue"
+        }
+    ]
+}

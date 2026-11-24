@@ -1,0 +1,34 @@
+{
+    "items": [
+        {
+            "source": "Stopping movement now.",
+            "english": "Stopping movement now.",
+            "command": "Stop"
+        },
+        {
+            "source": "Obstacle detected, please remove it.",
+            "english": "Obstacle detected, please remove it.",
+            "command": "Stop"
+        },
+        {
+            "source": "Moving to the left.",
+            "english": "Moving to the left.",
+            "command": "Move left"
+        },
+        {
+            "source": "Unclear gesture, please clarify.",
+            "english": "Unclear gesture, please clarify.",
+            "command": "Stop"
+        },
+        {
+            "source": "Battery low, plan for recharging soon.",
+            "english": "Battery low, plan for recharging soon.",
+            "command": "Continue"
+        },
+        {
+            "source": "Battery at 42%.",
+            "english": "Battery at 42%.",
+            "command": "Continue"
+        }
+    ]
+}

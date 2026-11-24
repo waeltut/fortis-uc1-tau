@@ -1,0 +1,34 @@
+{
+    "items": [
+        {
+            "source": "Hareket şimdi durduruluyor.",
+            "english": "Stopping movement now.",
+            "command": "Stop"
+        },
+        {
+            "source": "Engel algılandı, lütfen kaldırın.",
+            "english": "Obstacle detected, please remove it.",
+            "command": "Stop"
+        },
+        {
+            "source": "Sola doğru hareket ediliyor.",
+            "english": "Moving to the left.",
+            "command": "Move left"
+        },
+        {
+            "source": "Belirsiz hareket, lütfen açıklayın.",
+            "english": "Unclear gesture, please clarify.",
+            "command": "Stop"
+        },
+        {
+            "source": "Pil seviyesi düşük, yakında şarj etmeyi planlayın.",
+            "english": "Battery low, plan for recharging soon.",
+            "command": "Continue"
+        },
+        {
+            "source": "Pil seviyesi %42.",
+            "english": "Battery at 42%.",
+            "command": "Continue"
+        }
+    ]
+}

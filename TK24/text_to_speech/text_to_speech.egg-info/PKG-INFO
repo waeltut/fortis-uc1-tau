@@ -1,0 +1,5 @@
+Metadata-Version: 2.4
+Name: text_to_speech
+Version: 0.0.0
+Summary: ROS-free Piper TTS core used by the fortis_tk24_tts ROS 2 wrapper
+Dynamic: summary

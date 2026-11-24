@@ -1,0 +1,13 @@
+setup.py
+tests/test_core.py
+text_to_speech/__init__.py
+text_to_speech/audio.py
+text_to_speech/backend.py
+text_to_speech/config.py
+text_to_speech/hear_audio.py
+text_to_speech/message.py
+text_to_speech/synthesize.py
+text_to_speech.egg-info/PKG-INFO
+text_to_speech.egg-info/SOURCES.txt
+text_to_speech.egg-info/dependency_links.txt
+text_to_speech.egg-info/top_level.txt

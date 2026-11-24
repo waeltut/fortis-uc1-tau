@@ -1,0 +1,11 @@
+{
+    "average_seconds": 0.11629554799977389,
+    "files": {
+        "stopping movement now.wav": 0.129891841999779,
+        "obstacle detected please remove it.wav": 0.09345766200021899,
+        "moving to the left.wav": 0.07739561600101297,
+        "unclear gesture please clarify.wav": 0.11846775399862963,
+        "battery low plan for recharging soon.wav": 0.14565902299909794,
+        "battery at 42.wav": 0.13290139099990483
+    }
+}
