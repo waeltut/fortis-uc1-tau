@@ -5,32 +5,24 @@
 presets:
   home:
     mode: both
-    target_type: pose
+    target_type: joints
     velocity_scaling: 0.1
     acceleration_scaling: 0.1
-    left_target:
-      frame_id: mur
-      position:
-      - 0.6
-      - 0.15
-      - 1.2
-      orientation:
-      - 0.0
-      - 0.0
-      - 0.0
-      - 1.0
-    right_target:
-      frame_id: mur
-      position:
-      - 0.6
-      - -0.15
-      - 1.2
-      orientation:
-      - 0.0
-      - 0.0
-      - 0.0
-      - 1.0
-  home_joints:
+    left_joints:
+      left_shoulder_pan_joint: 0.08265749365091324
+      left_shoulder_lift_joint: -2.6509891949095667
+      left_elbow_joint: -1.815963864326477
+      left_wrist_1_joint: -1.813855310479635
+      left_wrist_2_joint: -1.487509552632467
+      left_wrist_3_joint: 4.4499125480651855
+    right_joints:
+      right_shoulder_pan_joint: -0.06099921861757451
+      right_shoulder_lift_joint: -0.47794969499621587
+      right_elbow_joint: 1.8073652426349085
+      right_wrist_1_joint: -1.3300429594567795
+      right_wrist_2_joint: 1.4983199834823608
+      right_wrist_3_joint: -0.2608988920794886
+  straight_arms:
     mode: both
     target_type: joints
     velocity_scaling: 0.1
@@ -49,22 +41,4 @@ presets:
       right_wrist_1_joint: 3.1415
       right_wrist_2_joint: -1.5707
       right_wrist_3_joint: -3.1415
-  ready_joints:
-    mode: both
-    target_type: joints
-    velocity_scaling: 0.1
-    acceleration_scaling: 0.1
-    left_joints:
-      left_elbow_joint: 1.5707
-      left_shoulder_lift_joint: -1.5707
-      left_shoulder_pan_joint: 0.0
-      left_wrist_1_joint: 0.0
-      left_wrist_2_joint: 1.5707
-      left_wrist_3_joint: -0.7854
-    right_joints:
-      right_elbow_joint: -1.5707
-      right_shoulder_lift_joint: -1.5707
-      right_shoulder_pan_joint: 0.0
-      right_wrist_1_joint: 3.1415
-      right_wrist_2_joint: -1.5707
-      right_wrist_3_joint: -2.3562
+
