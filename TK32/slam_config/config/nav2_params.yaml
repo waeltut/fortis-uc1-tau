@@ -165,10 +165,10 @@ controller_server:
       wz_std: 0.4
 
       # Keep these aligned with velocity_smoother below.
-      vx_max: 0.20
-      vx_min: -0.05
+      vx_max: 0.30
+      vx_min: -0.30
       vy_max: 0.0
-      wz_max: 0.40
+      wz_max: 0.60
       ax_max: 0.30
       ax_min: -0.40
       az_max: 0.60
@@ -414,8 +414,8 @@ velocity_smoother:
     use_sim_time: False     # Use for real-time
     #use_sim_time: True     # Use for Rosbags
 
-    max_velocity: [0.20, 0.0, 0.40]
-    min_velocity: [-0.05, 0.0, -0.40]
+    max_velocity: [0.30, 0.0, 0.60]
+    min_velocity: [-0.30, 0.0, -0.60]
 
     max_accel: [0.30, 0.0, 0.60]
     max_decel: [-0.40, 0.0, -0.80]
