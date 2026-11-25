@@ -239,11 +239,11 @@ class ScoreVisualizer(VolumeSelector):
             truncated = False
             if rows:
                 grid, tf = maps[0]
+                xy = transform_points([r[0][:2] for r in rows], tf)
                 field = TravelField(grid, transform_points([start[:2]], tf)[0],
                     self.cfg['travel_inflation_weight'], self.cfg['allow_unknown'],
-                    min(deadline, time.monotonic()+self.diag['travel_budget']), self.checkpoint)
+                    min(deadline, time.monotonic()+self.diag['travel_budget']), self.checkpoint, xy)
                 truncated = field.truncated
-                xy = transform_points([r[0][:2] for r in rows], tf)
                 travel = field.lookup(xy); cells = field.cells(xy)
                 for i, (row, cost) in enumerate(zip(rows, travel)):
                     if i % 256 == 0: checkpoint()
@@ -253,7 +253,7 @@ class ScoreVisualizer(VolumeSelector):
                         x, y = cells[i]
                         centre_cost = min(int(grid.data[y, x]), 253)/253
                         record['travel_estimate'] = float(cost)
-                        record.update(state='estimated', scores=components(pose, arm, bearing, goal, float(cost), centre_cost, self.cfg))
+                        record.update(state='estimated', scores=components(pose, arm, bearing, goal, float(cost), centre_cost, self.cfg, start[2]))
                     records.append(record)
             self.guard_motion(start, joints)
             summaries = None
@@ -279,7 +279,7 @@ class ScoreVisualizer(VolumeSelector):
                     if not self.cfg['check_nav2_paths']:
                         if 'travel_estimate' in r:
                             r.update(state='destination_clear', scores=components(
-                                r['pose'], r['arm'], r['bearing'], goal, r['travel_estimate'], destination, self.cfg))
+                                r['pose'], r['arm'], r['bearing'], goal, r['travel_estimate'], destination, self.cfg, start[2]))
                         else:
                             r['state'] = 'no_estimate'
                         continue
@@ -298,7 +298,7 @@ class ScoreVisualizer(VolumeSelector):
                     if not ok:
                         r['state'] = 'path_'+reason; continue
                     travel_cost = path_length(poses)*(1+self.cfg['travel_inflation_weight']*path_cost)
-                    r.update(state='path_checked', scores=components(r['pose'], r['arm'], r['bearing'], goal, travel_cost, destination, self.cfg))
+                    r.update(state='path_checked', scores=components(r['pose'], r['arm'], r['bearing'], goal, travel_cost, destination, self.cfg, start[2]))
                 self.guard_motion(start, joints)
                 summaries = self.publish_groups(raster, detailed, stamp)
             metadata = {

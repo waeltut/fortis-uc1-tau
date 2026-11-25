@@ -89,6 +89,7 @@ class VolumeWorkflowTests(unittest.TestCase):
             return ik.group_name
         client.call_async=call
         n.ik_client=client
+        n.verify_measured_state=lambda *_:False
         def request():
             return NS(ik_request=NS(robot_state=NS(joint_state=NS())))
         srv=NS(GetPositionIK=NS(Request=request))
@@ -106,6 +107,78 @@ class VolumeWorkflowTests(unittest.TestCase):
                                         {'joint':.3},monotonic()+1.,stats)
                 self.assertEqual(got,expected)
                 self.assertEqual(stats['online_ik_checks'],len(answers))
+
+    def test_fk_witness_requires_matching_pose_and_valid_state(self):
+        from unittest.mock import patch
+        from time import monotonic
+        from copy import deepcopy
+        n = node()
+        target = transport.PoseStamped()
+        actual = deepcopy(target)
+        ik = NS(pose_stamped=target, robot_state=object(), ik_link_name='tip')
+        n.fk_client = NS(service_is_ready=lambda:True, call_async=lambda req:NS(
+            error_code=NS(val=1), pose_stamped=[actual], fk_link_names=req.fk_link_names))
+        valid = NS(valid=False)
+        n.validity_client = NS(service_is_ready=lambda:True, call_async=lambda req:valid)
+        n.wait = lambda response, remaining:response
+        services = NS(GetPositionFK=NS(Request=NS), GetStateValidity=NS(Request=NS))
+        with patch.dict(sys.modules,{'moveit_msgs.srv':services}):
+            self.assertFalse(n.verify_measured_state(ik, monotonic()+1, {}))
+            valid.valid = True
+            self.assertTrue(n.verify_measured_state(ik, monotonic()+1, {}))
+            actual.pose.position.x += .002
+            self.assertFalse(n.verify_measured_state(ik, monotonic()+1, {}))
+
+    def test_overlap_reports_padding_and_rotated_costmap_frame(self):
+        n = node()
+        grid = Grid(np.array([0,254,254,0]),4,1,1.,(0.,0.,0.))
+        # tf rotates fixed-frame +X to costmap +Y and translates to (1,0).
+        source = np.array([[.1,-.8],[.7,-.8],[.7,-.1],[.1,-.1]])
+        checked = source.copy()
+        checked[[0,1],1] = -1.2
+        result = n.footprint_evidence(source,checked,(0.,0.,0.),[(grid,(1.,0.,np.pi/2))])
+        layer = result['global']
+        self.assertEqual(layer['lethal_touching_published'],1)
+        self.assertEqual(layer['lethal_only_in_padding'],1)
+        self.assertEqual(layer['published_cell_centres_xy'],[[.5,-.5]])
+        self.assertEqual(layer['padding_cell_centres_xy'],[[.5,-1.5]])
+
+    def test_stationary_global_margin_requires_local_clearance(self):
+        from test_service import Completion
+        source = np.array([[.051,.051],[.09,.051],[.09,.09],[.051,.09]])
+        checked = np.array([[.031,.031],[.11,.031],[.11,.11],[.031,.11]])
+        for global_hit, local_hit, local_width, should_stay in [
+                ((2,1),None,4,True), ((1,1),None,4,False),
+                ((2,1),(2,1),4,False), ((2,1),None,2,False)]:
+            n=node([])
+            n.robot_pose=lambda:(0.,0.,0.)
+            n.current_pose_arms=lambda *args:['left']
+            n.footprint_snapshot=lambda with_source=False:(source,checked) if with_source else checked
+            maps=[]
+            for cell,width in [(global_hit,4),(local_hit,local_width)]:
+                data=np.zeros((4,width),dtype=np.uint8)
+                if cell:data[cell[1],cell[0]]=254
+                maps.append((Grid(data,width,4,.05), (0.,0.,0.)))
+            n.costmaps=lambda *args:maps
+            n.polygon_check=lambda poly,m:transport.m.BaseSelector.polygon_check(n,poly,m)
+            done=Completion()
+            n.run(transport.PoseStamped(),'left',done)
+            self.assertEqual(done.value['success'],should_stay,done.value['message'])
+            if should_stay:
+                self.assertFalse(done.value['result']['requires_navigation'])
+                self.assertTrue(done.value['result']['current_pose_check']['global_margin_only'])
+
+    def test_footprint_rejection_is_preserved_in_failed_response(self):
+        from test_service import Completion
+        n=node([])
+        n.current_pose_arms=lambda *args:['left']
+        n.polygon_check=lambda *args:(False,'global_lethal_obstacle',0.)
+        done=Completion()
+        n.run(transport.PoseStamped(),'left',done)
+        trace=done.value['diagnostics']['current_pose_check']
+        self.assertEqual(trace['footprint'],'global_lethal_obstacle')
+        self.assertEqual(trace['outcome'],'footprint_rejected')
+        self.assertFalse(done.value['success'])
 
     def test_current_stance_preempts_volume_and_path_search(self):
         n=node()

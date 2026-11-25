@@ -220,20 +220,28 @@ class TravelField:
     Only settled distances are exposed when the computation budget expires.
     Final footprint/path validation is required for every selected destination.
     """
-    def __init__(self,grid,start_xy,cost_weight=3.,allow_unknown=False,deadline=math.inf,checkpoint=lambda:None):
+    def __init__(self,grid,start_xy,cost_weight=3.,allow_unknown=False,deadline=math.inf,checkpoint=lambda:None,destinations=None):
         self.grid=grid;self.dist=np.full((grid.height,grid.width),np.inf);self.settled=np.zeros_like(self.dist,dtype=bool)
         sx,sy=self.cells(np.asarray([start_xy]))[0];self.truncated=False
         if not (0<=sx<grid.width and 0<=sy<grid.height):raise ValueError('Robot outside global costmap')
         blocked=(grid.data==254)|((grid.data==255)&(not allow_unknown))
         if blocked[sy,sx]:raise ValueError('Robot centre in blocked global costmap cell')
         self.dist[sy,sx]=0.;heap=[(0.,int(sx),int(sy))];count=0
-        while heap:
+        pending = None
+        if destinations is not None:
+            cells = self.cells(destinations)
+            inside = ((cells[:,0] >= 0) & (cells[:,0] < grid.width) &
+                      (cells[:,1] >= 0) & (cells[:,1] < grid.height))
+            pending = {(int(x),int(y)) for x,y in cells[inside] if not blocked[y,x]}
+        while heap and (pending is None or pending):
             if count%256==0:
                 checkpoint()
                 if time.monotonic()>=deadline:self.truncated=True;break
             d,x,y=heapq.heappop(heap);count+=1
             if self.settled[y,x]:continue
             self.settled[y,x]=True
+            if pending is not None:
+                pending.discard((x,y))
             for dx,dy in ((1,0),(-1,0),(0,1),(0,-1),(1,1),(1,-1),(-1,1),(-1,-1)):
                 nx,ny=x+dx,y+dy
                 if not(0<=nx<grid.width and 0<=ny<grid.height) or blocked[ny,nx]:continue

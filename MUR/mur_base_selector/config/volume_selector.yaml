@@ -57,6 +57,7 @@ mur_base_selector:
     max_height_error: 0.05
     max_orientation_error_deg: 30.0
     travel_inflation_weight: 0.5
+    weight_heading_change: 0.0  # Score per radian from the measured base yaw
     weight_navigation: 0.2
     weight_destination_cost: 2.0
     weight_working_distance: 0.8

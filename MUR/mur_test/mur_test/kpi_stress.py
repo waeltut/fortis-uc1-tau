@@ -216,6 +216,14 @@ def finish_reports(out,rows,cases,manifest):
     return summary
 
 
+def scheduled_cases(snapshot, args):
+    cases = C.build_cases(snapshot,args.profile,args.seed,args.center,args.orientation,args.max_yaw_deg,args.offset_scale)
+    if getattr(args, 'reference_check', False):
+        names = ('reference_left', 'reference_right', 'reference_both_points')
+        return [min((c for c in cases if c['scenario'] == name), key=lambda c:c['id']) for name in names]
+    return cases
+
+
 def run(args):
     # Only the ROS-facing module imports rclpy. Importing core or viewing reports is safe offline.
     from .kpi_benchmark import RosInterface,response_info,pose_geometry,compact_diagnostic
@@ -258,7 +266,7 @@ def run(args):
                 snapshot=read_snapshot_ros(ros,left=args.left_tcp,right=args.right_tcp,
                                            base_frame=args.base_frame,mur_frame=args.mur_frame)
             validate_snapshot(snapshot)
-            cases=C.build_cases(snapshot,args.profile,args.seed,args.center,args.orientation,args.max_yaw_deg,args.offset_scale)
+            cases=scheduled_cases(snapshot, args)
             manifest={'tool':'mur_kpi_stress','schema_version':C.VERSION,
                       'generated_utc':datetime.now(timezone.utc).isoformat(),
                       'profile':args.profile,'seed':args.seed,
@@ -323,6 +331,9 @@ def run(args):
                         if raw_diag:
                             try:row['diagnostics_json']=json.dumps(json.loads(raw_diag),separators=(',',':'))
                             except (ValueError,TypeError):row['diagnostics_json']=str(raw_diag)
+                        if getattr(args, 'reference_check', False):
+                            trace = json.loads(raw_diag or '{}').get('current_pose_check')
+                            print('Current stance:', json.dumps(trace), flush=True)
                         if status!='success':
                             row['failure_hint']=C.extract_failure_hint(message,row['diagnostics_json'])
                         else:
@@ -406,7 +417,7 @@ def preview(args):
                                        base_frame=args.base_frame,mur_frame=args.mur_frame)
         finally:ros.shutdown()
     validate_snapshot(snapshot)
-    cases=C.build_cases(snapshot,args.profile,args.seed,args.center,args.orientation,args.max_yaw_deg,args.offset_scale)
+    cases=scheduled_cases(snapshot, args)
     print(f'{len(cases)} generated cases. First {min(args.limit or 10,len(cases))}:')
     for case in cases[:args.limit or 10]:
         print('%4d %-26s %2d points %-20s position %.3f m rotation %.1f deg'%(
@@ -436,6 +447,7 @@ def main(argv=None):
     ap=argparse.ArgumentParser(description=__doc__,formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     ap.add_argument('mode',choices=('run','preview','report'))
     ap.add_argument('--profile',choices=tuple(C.PROFILES),default='standard')
+    ap.add_argument('--reference-check', action='store_true', help='Only check the observed left, right and paired TCP targets once each')
     ap.add_argument('--center', nargs=3, type=float, metavar=('X','Y','Z'), help='Map-frame TCP centre in metres for perturbed cases')
     ap.add_argument('--orientation', nargs=4, type=float, metavar=('QX','QY','QZ','QW'), help='Map-frame TCP orientation; default uses each observed TCP quaternion')
     ap.add_argument('--max-yaw-deg', type=float, default=5., help='Maximum absolute change in map heading of a perturbed TCP')

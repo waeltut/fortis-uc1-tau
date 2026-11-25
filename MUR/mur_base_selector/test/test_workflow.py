@@ -103,7 +103,8 @@ def node():
     n.transform_target = lambda target, frame: copy.deepcopy(target)
     n.robot_pose = lambda: (0., 0., 0.)
     n.joint_snapshot = lambda: {'left_elbow_joint': 0.}
-    n.footprint_snapshot = lambda: [[-.3, -.3], [.3, -.3], [.3, .3], [-.3, .3]]
+    polygon = [[-.3, -.3], [.3, -.3], [.3, .3], [-.3, .3]]
+    n.footprint_snapshot = lambda with_source=False: (polygon, polygon) if with_source else polygon
     n.costmaps = lambda: []
     n.tf_planar = lambda *a: (0., 0., 0.)
     n.guard_motion = lambda *a: n.checkpoint()

@@ -74,7 +74,7 @@ class Grid:
         self.data = raw.astype(np.uint8).reshape(height, width)
         self.width, self.height, self.resolution, self.origin = width, height, resolution, origin
 
-    def check(self, polygon, partial=False, allow_unknown=False):
+    def check(self, polygon, partial=False, allow_unknown=False, lethal_cells=None):
         x, y, yaw = self.origin
         poly = transform_points(np.asarray(polygon)-[x, y], (0, 0, -yaw))/self.resolution
         lo, hi = poly.min(axis=0), poly.max(axis=0)
@@ -106,6 +106,9 @@ class Grid:
         if not len(values):
             return Check(True, covered=False)
         if (values == 254).any():
+            if lethal_cells is not None:
+                lethal = values == 254
+                lethal_cells.extend(zip(xx.ravel()[hit][lethal].tolist(), yy.ravel()[hit][lethal].tolist()))
             return Check(False, 'lethal_obstacle', covered=covered)
         if (values == 255).any() and not allow_unknown:
             return Check(False, 'unknown_space', covered=covered)

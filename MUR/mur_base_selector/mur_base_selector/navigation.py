@@ -548,7 +548,7 @@ class BaseSelector(Node):
             raise SelectionError('Missing/stale arm joints: '+', '.join(missing))
         return {n: data[n][0] for n in self.cfg['arm_joints']}
 
-    def footprint_snapshot(self):
+    def footprint_snapshot(self, with_source=False):
         with self.lock:
             data = copy.deepcopy(self.footprint)
         if data is None or time.monotonic()-data[1] > self.cfg['max_data_age']:
@@ -557,7 +557,9 @@ class BaseSelector(Node):
         self.check_age(msg.header.stamp, 'footprint')
         tf = self.tf_planar(self.cfg['base_frame'], msg.header.frame_id, msg.header.stamp)
         poly = transform_points([(p.x, p.y) for p in msg.polygon.points], tf)
-        return padded(hull(poly), self.cfg['footprint_padding'])
+        source = hull(poly)
+        checked = padded(source, self.cfg['footprint_padding'])
+        return (source, checked) if with_source else checked
 
     def guard_motion(self, start, joints):
         self.checkpoint()

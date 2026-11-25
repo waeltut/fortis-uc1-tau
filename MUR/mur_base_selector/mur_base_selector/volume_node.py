@@ -15,7 +15,7 @@ from std_msgs.msg import String,Bool
 from nav_msgs.msg import Path as NavPath
 from visualization_msgs.msg import Marker,MarkerArray
 from .navigation import BaseSelector,Candidate,SelectionError,Cancelled,CheckingBudgetExhausted,pose_msg,quaternion
-from .core import transform_points,diverse_order,path_length
+from .core import angle, transform_points,diverse_order,path_length
 from .volume import TravelField,working_score
 from .visual_data import candidate_snapshot
 from .cache_startup import DEFAULT_VOLUME_FILE,CacheStartupError,load_selector_volume
@@ -36,7 +36,7 @@ DEFAULTS={
  'front_fov_deg':250.0,'front_yaw_offset_deg':0.0,
  'travel_inflation_weight':3.0,
  'weight_navigation':1.0,'weight_destination_cost':2.0,
- 'weight_working_distance':1.0,'weight_facing':0.5,
+ 'weight_heading_change':0.20,'weight_working_distance':1.0,'weight_facing':0.5,
  'distance_scale':0.25,
  'both_preferred_distance':0.65,
  'both_facing_min_deg':-10.0,'both_facing_max_deg':10.0,
@@ -305,7 +305,9 @@ class VolumeSelector(BaseSelector):
             if self.cfg['front_fov_deg']>generated['workspace_fov_deg'] or abs(self.cfg['front_yaw_offset_deg']-generated['workspace_front_offset_deg'])>1e-9:
                 raise ValueError('Requested FOV exceeds cache or front offset differs; regenerate cache')
             self.model_client=self.create_client(GetParameters,self.volume.meta["context"]["source_node"].rstrip("/")+"/get_parameters",callback_group=self.group)
-            from moveit_msgs.srv import GetPositionIK
+            from moveit_msgs.srv import GetPositionIK, GetPositionFK, GetStateValidity
+            self.fk_client = self.create_client(GetPositionFK, '/compute_fk', callback_group=self.group)
+            self.validity_client = self.create_client(GetStateValidity, '/check_state_validity', callback_group=self.group)
             self.ik_client = self.create_client(GetPositionIK, self.cfg['ik_service'], callback_group=self.group)
             self._model_normalization_logged=set()
             self.visual_target=None
@@ -351,6 +353,8 @@ class VolumeSelector(BaseSelector):
             response.tcp_frames=[context['tips'][name] for name in names]
             response.score=result['score'];response.valid_for_seconds=result['valid_for_seconds']
             response.diagnostics_json=json.dumps(result,allow_nan=False)
+        elif 'diagnostics' in outcome:
+            response.diagnostics_json=json.dumps(outcome['diagnostics'],allow_nan=False)
         return response
 
     def visual_stage(self,stage,rows=None,goal=None,truncated=None):
@@ -413,7 +417,7 @@ class VolumeSelector(BaseSelector):
         if not isinstance(c['orientation_profiles_deg'],(list,tuple)) or not c['orientation_profiles_deg'] or not all(isinstance(v,(float,int)) and math.isfinite(v) for v in c['orientation_profiles_deg']):raise ValueError('orientation_profiles_deg must be a nonempty numeric list')
         if not 0<=c['minimum_orientation_coverage']<=1 or not 0<c['front_fov_deg']<=360:raise ValueError('Invalid coverage/FOV')
         if c['max_height_error']<0 or not 0<=c['max_orientation_error_deg']<=90:raise ValueError('Invalid approximation tolerance')
-        for k in ('weight_navigation','weight_destination_cost','weight_working_distance','weight_facing','travel_inflation_weight'):
+        for k in ('weight_navigation','weight_heading_change','weight_destination_cost','weight_working_distance','weight_facing','travel_inflation_weight'):
             if c[k]<0:raise ValueError('Negative '+k)
         for arm in (*self.volume.arm_names,'both'):
             if not all(math.isfinite(c[arm+suffix]) for suffix in ('_preferred_distance','_facing_min_deg','_facing_max_deg')):raise ValueError('Nonfinite arm preference')
@@ -463,35 +467,120 @@ class VolumeSelector(BaseSelector):
         self.cache_context()  # rigid mount identity only; no cached arm posture
 
     def score_candidate(self,c,travel,destination_cost,target):
+        heading_cost = self.cfg['weight_heading_change'] * abs(angle(c.pose[2] - c.start_yaw))
         if hasattr(c,'point_rows'):
             work=sum(working_score(math.hypot(c.pose[0]-g[0],c.pose[1]-g[1]),r[2],r[1],self.cfg)
                      for g,r in zip(c.point_goals,c.point_rows))/len(c.point_rows)
-            return self.cfg['weight_navigation']*travel/self.cfg['length_scale']+self.cfg['weight_destination_cost']*destination_cost+work
+            return heading_cost+self.cfg['weight_navigation']*travel/self.cfg['length_scale']+self.cfg['weight_destination_cost']*destination_cost+work
         distance=math.hypot(c.pose[0]-target[0],c.pose[1]-target[1])
-        return (self.cfg['weight_navigation']*travel/self.cfg['length_scale']+
+        return (heading_cost+self.cfg['weight_navigation']*travel/self.cfg['length_scale']+
                 self.cfg['weight_destination_cost']*destination_cost+
                 working_score(distance,c.bearing,c.arm,self.cfg))
 
+    def verify_measured_state(self, ik, deadline, attempt):
+        """Check the same joint seed by FK and full-state validity if IK misses."""
+        from moveit_msgs.srv import GetPositionFK, GetStateValidity
+        def query(client, req):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0 or not client.service_is_ready():
+                return None
+            future = client.call_async(req)
+            try:
+                return self.wait(future, remaining)
+            except Cancelled:
+                raise
+            except SelectionError:
+                future.cancel()
+                return None
+
+        req = GetPositionFK.Request()
+        req.robot_state = ik.robot_state
+        req.header = ik.pose_stamped.header
+        req.fk_link_names = [ik.ik_link_name]
+        fk = query(self.fk_client, req)
+        if fk is None or fk.error_code.val != 1 or len(fk.pose_stamped) != 1:
+            attempt['fk'] = 'unavailable_or_failed'
+            return False
+        actual = fk.pose_stamped[0]
+        if actual.header.frame_id != req.header.frame_id or list(fk.fk_link_names) != req.fk_link_names:
+            attempt['fk'] = 'frame_or_link_mismatch'
+            return False
+        expected = ik.pose_stamped.pose
+        pos = actual.pose.position
+        delta = math.dist((pos.x,pos.y,pos.z),(expected.position.x,expected.position.y,expected.position.z))
+        dot = abs(float(np.dot(quaternion(actual.pose.orientation),quaternion(expected.orientation))))
+        rotation = math.degrees(2*math.acos(min(1.,dot)))
+        if not math.isfinite(delta):
+            attempt['fk'] = 'nonfinite_position'
+            return False
+        attempt.update(fk_position_error_m=delta, fk_orientation_error_deg=rotation)
+        if delta > .001 or rotation > .1:
+            return False
+        request = GetStateValidity.Request()
+        request.robot_state = ik.robot_state
+        valid = query(self.validity_client, request)
+        attempt['measured_state_valid'] = None if valid is None else bool(valid.valid)
+        if valid is not None and not valid.valid:
+            attempt['contact_pairs'] = [[c.contact_body_1, c.contact_body_2]
+                                        for c in getattr(valid, 'contacts', [])[:4]]
+        return valid is not None and valid.valid
+
+    def footprint_evidence(self, source, checked, start, maps):
+        report = {'frame': self.cfg['fixed_frame'], 'selector_padding_m': self.cfg['footprint_padding']}
+        for name, (grid, tf) in zip(('global','local'), maps):
+            polygons = [transform_points(transform_points(poly, start), tf) for poly in (source, checked)]
+            hits = []
+            for polygon in polygons:
+                cells = []
+                verdict = grid.check(polygon, partial=name=='local',
+                                     allow_unknown=self.cfg['allow_unknown'], lethal_cells=cells)
+                hits.append((verdict, set(cells)))
+            raw, padded_result = hits
+            inside = padded_result[1] & raw[1]
+            margin = padded_result[1] - raw[1]
+            detail = {'resolution_m': grid.resolution, 'published_verdict': raw[0].reason or 'clear',
+                      'published_cost': raw[0].cost, 'padded_cost': padded_result[0].cost,
+                      'padded_verdict': padded_result[0].reason or 'clear',
+                      'fully_covered': padded_result[0].covered,
+                      'lethal_touching_published': len(inside), 'lethal_only_in_padding': len(margin)}
+            for label, cells in [('published', inside), ('padding', margin)]:
+                if cells:
+                    # tf maps fixed-frame coordinates to costmap coordinates.
+                    sample = np.asarray(sorted(cells)[:5], dtype=float)
+                    centres = transform_points((sample + .5) * grid.resolution, grid.origin)
+                    fixed = transform_points(centres - tf[:2], (0.,0.,-tf[2]))
+                    detail[label+'_cell_centres_xy'] = np.round(fixed, 4).tolist()
+            report[name] = detail
+        return report
+
     def current_pose_arms(self, targets, modes, joints, deadline, stats):
         """Resolve every point independently, matching SelectBase's 'both' contract."""
-        if time.monotonic() >= deadline or not self.ik_client.service_is_ready():
+        trace = stats.setdefault('current_pose_check', {})
+        trace.update(outcome='ik_budget_expired', footprint='not_checked', attempts=[])
+        if time.monotonic() >= deadline:
+            return None
+        if not self.ik_client.service_is_ready():
+            trace['outcome'] = 'ik_service_unavailable'
             return None
         from moveit_msgs.srv import GetPositionIK
         from rclpy.duration import Duration
 
         context = self.volume.meta['context']
         resolved = []
-        for target, mode in zip(targets, modes):
+        for index, (target, mode) in enumerate(zip(targets, modes), 1):
+            trace['point'] = index
             local = self.transform_target(target, self.cfg['base_frame'])
             p = local.pose.position
             bearing = math.atan2(p.y, p.x) - math.radians(self.cfg['front_yaw_offset_deg'])
             if abs(math.atan2(math.sin(bearing), math.cos(bearing))) > math.radians(self.cfg['front_fov_deg']) / 2:
+                trace['outcome'] = 'outside_fov'
                 return None
             arms = self.volume.arm_names if mode in ('either', 'both') else [mode]
             target_ref = self.transform_target(target, context['reference_frame'])
             for arm in arms:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
+                    trace['outcome'] = 'ik_budget_expired'
                     return None
                 request = GetPositionIK.Request()
                 ik = request.ik_request
@@ -503,6 +592,9 @@ class VolumeSelector(BaseSelector):
                 ik.robot_state.joint_state.name = list(joints)
                 ik.robot_state.joint_state.position = list(joints.values())
                 ik.timeout = Duration(seconds=min(0.2, remaining)).to_msg()
+                attempt = dict(point=index, arm=arm, group=ik.group_name, tip=ik.ik_link_name,
+                               frame=ik.pose_stamped.header.frame_id)
+                trace['attempts'].append(attempt)
                 stats['online_ik_checks'] += 1
                 future = self.ik_client.call_async(request)
                 try:
@@ -511,17 +603,26 @@ class VolumeSelector(BaseSelector):
                     raise
                 except SelectionError:
                     future.cancel()
+                    trace['outcome'] = 'ik_transport_timeout'
                     return None
-                if reply.error_code.val == 1:
+                attempt['ik_code'] = int(reply.error_code.val)
+                reached = reply.error_code.val == 1
+                if not reached:
+                    reached = self.verify_measured_state(ik, deadline, attempt)
+                attempt['method'] = ('ik' if reply.error_code.val == 1 else 'measured_fk' if reached else 'failed')
+                if reached:
                     if mode != 'both':
                         resolved.append(arm)
                         break
                 elif mode != 'either':
+                    trace['outcome'] = 'arm_requirement_failed'
                     return None
             else:
                 if mode != 'both':
+                    trace['outcome'] = 'no_arm_succeeded'
                     return None
                 resolved.append('both')
+        trace['outcome'] = 'arms_verified'
         return resolved
 
     def publish_selection(self, result, candidate, candidates, start, joints, outcome):
@@ -544,6 +645,7 @@ class VolumeSelector(BaseSelector):
 
     def run(self,target,arm_mode=None,completion=None):
         started=time.monotonic();deadline=started+self.cfg['selection_budget'];search_end=deadline-self.cfg['final_validation_reserve']
+        stats = {'online_ik_checks':0, 'current_pose_check':{'outcome':'not_started','footprint':'not_checked','attempts':[]}}
         timings={};candidates=[];feasible=[];paths=destinations=0
         outcome={'success':False,'message':'Selection interrupted','request_id':self.sequence}
         try:
@@ -561,23 +663,43 @@ class VolumeSelector(BaseSelector):
             timings['setup_seconds']=time.monotonic()-started
             p=frozen.pose.position;goal=[p.x,p.y,p.z,*quaternion(frozen.pose.orientation)]
             goals=[[t.pose.position.x,t.pose.position.y,t.pose.position.z,*quaternion(t.pose.orientation)] for t in frozen_targets]
-            stats = {'online_ik_checks': 0}
             phase = time.monotonic()
             try:
                 arm_choices = self.current_pose_arms(frozen_targets, modes, joints,
                     min(search_end, phase + self.cfg['current_pose_ik_budget']), stats)
             except Cancelled:
                 raise
-            except SelectionError:
+            except SelectionError as error:
+                stats['current_pose_check'].update(outcome='check_error', detail=str(error))
                 arm_choices = None
             timings['current_pose_seconds'] = time.monotonic() - phase
             if arm_choices:
+                stats['current_pose_check']['footprint'] = 'awaiting_fresh_maps'
                 map_start = time.monotonic()
                 maps = self.costmaps(search_end)
-                clear, _, cost = self.polygon_check(transform_points(self.footprint_snapshot(), start), maps)
+                source, checked = self.footprint_snapshot(with_source=True)
+                clear, reason, cost = self.polygon_check(transform_points(checked, start), maps)
+                if not clear:
+                    overlap = self.footprint_evidence(source, checked, start, maps)
+                    stats['current_pose_check']['overlap'] = overlap
+                    # Already parked: allow a global margin-only hit when the
+                    # fresh local map also clears the entire padded envelope.
+                    g = overlap.get('global', {})
+                    loc = overlap.get('local', {})
+                    if (reason == 'global_lethal_obstacle' and g.get('fully_covered')
+                            and g['published_verdict'] == 'clear' and g['lethal_only_in_padding'] > 0
+                            and loc.get('fully_covered') and loc['padded_verdict'] == 'clear'):
+                        clear = True
+                        cost = max(g['published_cost'], loc['padded_cost'])
+                        stats['current_pose_check']['global_margin_only'] = True
+                stats['current_pose_check']['footprint'] = 'clear' if clear else reason
                 self.guard_motion(start, joints)
                 self.remaining(search_end, 1.)
-                if clear and time.monotonic() - map_start <= self.cfg['max_data_age']:
+                fresh = time.monotonic() - map_start <= self.cfg['max_data_age']
+                trace = stats['current_pose_check']
+                trace['outcome'] = 'maps_aged_out' if not fresh else 'footprint_rejected' if not clear else 'accepted'
+                if clear and fresh:
+                    all_ik = all(a.get('method') != 'measured_fk' for a in trace['attempts'])
                     arm = arm_choices[0] if len(set(arm_choices)) == 1 else 'mixed'
                     current = Candidate(0, start, arm, score=0., state='selected')
                     result = dict(request_id=self.sequence, valid=True, frame_id=self.cfg['fixed_frame'],
@@ -585,7 +707,8 @@ class VolumeSelector(BaseSelector):
                         pose=list(start), score=0., valid_for_seconds=self.cfg['selection_ttl'],
                         requires_navigation=False, path_checked=False, path_checks=0, feasible_paths=0,
                         path_length_m=0., path_cost=None, destination_cost=cost, timings=timings,
-                        reachability_evidence='current_pose_collision_aware_ik', exact_target_ik_verified=True,
+                        reachability_evidence='current_pose_collision_aware_ik' if all_ik else 'current_pose_ik_or_validated_fk',
+                        exact_target_ik_verified=all_ik,
                         combined_arm_collision_checked=False, elapsed_seconds=time.monotonic()-started, **stats)
                     self.visual_stage('current_pose')
                     self.publish_selection(result, current, [current], start, joints, outcome)
@@ -618,14 +741,16 @@ class VolumeSelector(BaseSelector):
             self.visual_stage('cache',rows)
             if not rows:raise SelectionError('No volume candidates under current coverage/orientation/height/FOV limits; not proof of unreachability')
             phase=time.monotonic();grid,tf=maps[0]
-            field=TravelField(grid,transform_points([start[:2]],tf)[0],self.cfg['travel_inflation_weight'],self.cfg['allow_unknown'],min(search_end,time.monotonic()+self.cfg['travel_field_budget']),self.checkpoint)
-            travel=field.lookup(transform_points([r[0][:2] for r in rows],tf))
+            destinations_xy=transform_points([r[0][:2] for r in rows],tf)
+            field=TravelField(grid,transform_points([start[:2]],tf)[0],self.cfg['travel_inflation_weight'],self.cfg['allow_unknown'],min(search_end,time.monotonic()+self.cfg['travel_field_budget']),self.checkpoint, destinations_xy)
+            cells=field.cells(destinations_xy)
+            travel=field.lookup(destinations_xy)
             timings['travel_field_seconds']=time.monotonic()-phase
             for i,(row,cost) in enumerate(zip(rows,travel)):
                 if not math.isfinite(cost):continue
                 pose,arm,bearing,coverage,height_error,rotation_error=row[:6]
-                c=Candidate(i,pose,arm);c.bearing=bearing;c.coverage=coverage;c.height_error=height_error;c.rotation_error=rotation_error;c.travel=float(cost)
-                cell=field.cells(transform_points([pose[:2]],tf))[0]
+                c=Candidate(i,pose,arm);c.start_yaw=start[2];c.bearing=bearing;c.coverage=coverage;c.height_error=height_error;c.rotation_error=rotation_error;c.travel=float(cost)
+                cell=cells[i]
                 centre_cost=min(int(grid.data[cell[1],cell[0]]),253)/253
                 c.orientation_profiles=row[6] if len(row)>6 else {}
                 if assignments:c.point_rows=assignments[pose];c.point_goals=goals
@@ -687,7 +812,7 @@ class VolumeSelector(BaseSelector):
             chosen.state='selected';timings['final_validation_seconds']=time.monotonic()-phase
             result={'request_id':self.sequence,'valid':True,'frame_id':self.cfg['fixed_frame'],'arm':chosen.arm,'pose':list(chosen.pose),'score':chosen.score,
                     'requires_navigation':True,'path_checked':check_paths,'path_length_m':chosen.length if check_paths else None,'path_cost':chosen.cost if check_paths else None,'destination_cost':chosen.destination_cost,
-                    'cache_id':self.volume.meta['cache_id'],'reachability_evidence':'sampled_volume_lookup','online_ik_checks':stats['online_ik_checks'],
+                    'cache_id':self.volume.meta['cache_id'],'reachability_evidence':'sampled_volume_lookup',**stats,
                     'orientation_profiles':chosen.orientation_profiles,'active_profile_angles_deg':self.volume.profile_angles if hasattr(self.volume,'profile_angles') else [],'orientation_coverage':chosen.coverage,'height_error_m':chosen.height_error,'orientation_error_deg':math.degrees(chosen.rotation_error),
                     'volume_candidates':len(rows),'ranking_pool':len(candidates),'destination_checks':destinations,'path_checks':paths,'feasible_paths':len(feasible) if check_paths else 0,
                     'travel_field_truncated':field.truncated,'timings':timings,'elapsed_seconds':time.monotonic()-started,'valid_for_seconds':self.cfg['selection_ttl'],
@@ -698,7 +823,7 @@ class VolumeSelector(BaseSelector):
             result['arm']=result['point_arms'][0] if len(set(result['point_arms']))==1 else 'mixed'
             self.publish_selection(result, chosen, candidates, start, joints, outcome)
         except Exception as e:
-            outcome.update(success=False,message=str(e))
+            outcome.update(success=False,message=str(e),diagnostics=dict(timings=timings,**stats))
             if rclpy.ok():
                 self.invalidate();self.publish_markers(candidates);self.status('cancelled' if isinstance(e,Cancelled) else 'failed',str(e),timings=timings,elapsed_seconds=time.monotonic()-started)
         finally:

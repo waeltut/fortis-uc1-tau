@@ -7,7 +7,7 @@ from .volume import sector_penalty
 COMPONENTS = ('travel', 'destination', 'distance', 'facing', 'total')
 
 
-def components(pose, arm, bearing, target, travel, destination, cfg):
+def components(pose, arm, bearing, target, travel, destination, cfg, start_yaw=None):
     distance = math.hypot(pose[0]-target[0], pose[1]-target[1])
     values = {
         'travel': cfg['weight_navigation']*travel/cfg['length_scale'],
@@ -15,6 +15,8 @@ def components(pose, arm, bearing, target, travel, destination, cfg):
         'distance': cfg['weight_working_distance']*((distance-cfg[arm+'_preferred_distance'])/cfg['distance_scale'])**2,
         'facing': cfg['weight_facing']*sector_penalty(bearing, cfg[arm+'_facing_min_deg'], cfg[arm+'_facing_max_deg']),
     }
+    if start_yaw is not None:
+        values['travel'] += cfg['weight_heading_change'] * abs(angle(pose[2]-start_yaw))
     values['total'] = sum(values.values())
     if not all(math.isfinite(v) and v >= 0 for v in values.values()):
         raise ValueError('Score components must be finite and non-negative')

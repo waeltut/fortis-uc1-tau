@@ -11,6 +11,17 @@ from mur_base_selector.core import Grid
 
 
 class VolumeTests(unittest.TestCase):
+    def test_destination_limited_field_matches_full_field(self):
+        data=np.zeros((30,30),dtype=np.uint8)
+        data[2:10,6]=254
+        data[4:8,4]=200
+        grid=Grid(data,30,30,1)
+        xy=np.array([[4.5,5.5],[7.5,5.5],[4.5,5.5],[6.5,5.5],[-2.,0.]])
+        full=TravelField(grid,(3.5,3.5))
+        limited=TravelField(grid,(3.5,3.5),destinations=xy)
+        np.testing.assert_array_equal(full.lookup(xy),limited.lookup(xy))
+        self.assertLess(limited.settled.sum(),full.settled.sum())
+
     def volume(self,mask=None,done=True):
         tmp=tempfile.TemporaryDirectory();self.addCleanup(tmp.cleanup)
         cfg={'tool_axis':[1,0,0],'min_inward_angle_deg':0,'workspace_fov_deg':250,'workspace_front_offset_deg':0,'inward_reference':'horizontal'}
