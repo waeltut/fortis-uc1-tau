@@ -156,7 +156,7 @@ controller_server:
 
       # 10 Hz controller <=> 0.1 s model step; 15 steps predict 1.5 seconds.
       # Start at 1000 samples on the Jetson; raise to 2000 only after profiling.
-      time_steps: 15
+      time_steps: 25
       model_dt: 0.1
       batch_size: 1000
       iteration_count: 1
