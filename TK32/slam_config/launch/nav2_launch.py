@@ -1,8 +1,11 @@
+import math
 import os
+
+import yaml
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.descriptions import ParameterFile
@@ -36,6 +39,26 @@ def generate_launch_description():
     # --------------------------------------------------
     # Launch description
     # --------------------------------------------------
+    def start_amcl(context):
+        path = map_yaml.perform(context)
+        with open(path, encoding='utf-8') as stream:
+            home = yaml.safe_load(stream).get('mur_home')
+        overrides = {'set_initial_pose': home is not None}
+        if home is not None:
+            for axis in ('x', 'y', 'yaw'):
+                value = home[axis]
+                if type(value) not in (int, float) or not math.isfinite(value):
+                    raise ValueError(f'{path}: mur_home.{axis} must be a finite number')
+                overrides['initial_pose.' + axis] = float(value)
+            overrides['initial_pose.z'] = 0.0
+        return [Node(
+            package='nav2_amcl',
+            executable='amcl',
+            name='amcl',
+            output='screen',
+            parameters=[configured_params, overrides],
+        )]
+
     return LaunchDescription([
 
         DeclareLaunchArgument(
@@ -68,13 +91,7 @@ def generate_launch_description():
         # ==================================================
         # AMCL
         # ==================================================
-        Node(
-            package='nav2_amcl',
-            executable='amcl',
-            name='amcl',
-            output='screen',
-            parameters=[configured_params],
-        ),
+        OpaqueFunction(function=start_amcl),
 
         # ==================================================
         # LIFECYCLE MANAGER – LOCALIZATION

@@ -8,6 +8,9 @@ import threading
 import time
 import select
 import sys
+
+import yaml
+from rcl_interfaces.srv import GetParameters
 from mur_base_selector_interfaces.srv import SelectBase
 
 import rclpy
@@ -58,6 +61,7 @@ class MurTest(Node):
 
         self.pending_points = []
         self.collecting = True
+        self.map_params = self.create_client(GetParameters, '/map_server/get_parameters')
         self.selector = self.create_client(SelectBase, self.p('selection_service'))
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
@@ -201,7 +205,7 @@ class MurTest(Node):
         with self.lock:
             self.collecting = True
         print('Place points. Each point will ask for any/left/right/both (Enter = any).')
-        print('Type done to confirm, clear to reset, or quit to exit.', flush=True)
+        print('Type done to confirm, clear to reset, base-home to park, or quit to exit.', flush=True)
         while rclpy.ok():
             with self.lock:
                 pending = self.pending_points.pop(0) if self.pending_points else None
@@ -225,6 +229,14 @@ class MurTest(Node):
             if not line: raise EOFError()
             command = line.strip().lower()
             if command in ('quit','q'): return None
+            if command == 'base-home':
+                try:
+                    self.base_home(self.target_generation)
+                except Exception as exc:
+                    self.get_logger().error('Base home failed: %s' % exc)
+                    if self.motion_fault:
+                        return None
+                continue
             if command == 'clear':
                 points.clear(); arms.clear()
                 with self.lock: self.pending_points.clear()
@@ -261,6 +273,39 @@ class MurTest(Node):
             if chosen not in ('left','right','both') or (required != 'any' and chosen != required):
                 raise RuntimeError('Selector returned an incompatible arm assignment')
         return result
+
+    def base_home(self, generation):
+        timeout = float(self.p('interface_timeout'))
+        if not self.map_params.wait_for_service(timeout_sec=timeout):
+            raise RuntimeError('Map server parameters unavailable')
+        request = GetParameters.Request()
+        request.names = ['yaml_filename', 'frame_id']
+        future = self.map_params.call_async(request)
+        ready = threading.Event()
+        future.add_done_callback(lambda _: ready.set())
+        if not ready.wait(timeout):
+            future.cancel()
+            raise RuntimeError('Timed out reading map server parameters')
+        path, frame = [p.string_value for p in future.result().values]
+        with open(path, encoding='utf-8') as stream:
+            home = yaml.safe_load(stream).get('mur_home')
+        if home is None:
+            raise RuntimeError(f'Configure mur_home in {path} first')
+        x, y, yaw = [home[key] for key in ('x', 'y', 'yaw')]
+        if not frame or not all(type(v) in (float, int) and math.isfinite(v)
+                                for v in (x, y, yaw)):
+            raise ValueError('Invalid map frame or mur_home pose')
+        pose = PoseStamped()
+        pose.header.frame_id = frame
+        pose.pose.position.x = float(x)
+        pose.pose.position.y = float(y)
+        pose.pose.orientation.z = math.sin(yaw / 2.0)
+        pose.pose.orientation.w = math.cos(yaw / 2.0)
+        if not self.confirm(f'Navigate MiR home in {frame} to ({x:.3f}, {y:.3f}), yaw {math.degrees(yaw):.1f} deg?'):
+            return False
+        self.navigate(pose, generation)
+        self.log_actual_arrival(pose)
+        return True
 
     def home(self, generation):
         if not self.commander.wait_for_server(timeout_sec=float(self.p('commander_wait_timeout'))):
@@ -308,15 +353,19 @@ class MurTest(Node):
                     self.log_actual_arrival(base)
                     while rclpy.ok() and self.motion_fault is None:
                         print('Points: ' + ', '.join('P%d (%s)' % (i+1,a) for i,a in enumerate(result.point_arms)))
-                        choice = input('Move to P1/P2/..., home, new workspace, or quit: ').strip().lower()
+                        choice = input('Move to P1/P2/..., home (arms), base-home (MiR), new workspace, or quit: ').strip().lower()
                         if choice in ('quit','q'): return
                         if choice == 'new': break
                         try:
+                            if choice == 'base-home':
+                                if self.base_home(generation):
+                                    break
+                                continue
                             if choice == 'home':
                                 self.home(generation); continue
                             try: index = int((choice[1:] if choice.startswith('p') else choice)) - 1
                             except ValueError:
-                                print('Choose a listed point, home, new or quit.'); continue
+                                print('Choose a listed point, home, base-home, new or quit.'); continue
                             if not 0 <= index < len(points):
                                 print('Point does not exist.'); continue
                             arm = result.point_arms[index]
@@ -327,6 +376,8 @@ class MurTest(Node):
                             self.execute_commander_goal(arm, points[index], generation)
                         except Exception as exc:
                             self.get_logger().error('Motion failed: %s' % exc)
+                            if choice == 'base-home':
+                                break
                 except Exception as exc:
                     self.get_logger().error('Workspace stopped: %s' % exc)
         except (KeyboardInterrupt, EOFError):
